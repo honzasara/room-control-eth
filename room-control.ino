@@ -118,7 +118,7 @@ typedef struct struct_status_DDS18s20
 
 #define wire_know_rom_0 140
 #define wire_know_rom_4 220
-
+#define my_name 240
 
 
 
@@ -297,7 +297,7 @@ Struct_RootHistory RootHistory;
   };
 */
 
-////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////
 void get_tds18s20(uint8_t idx, struct_DDS18s20 *tds)
 {
   tds->used = EEPROM.read(wire_know_rom_0 + (idx * 20));
@@ -579,7 +579,31 @@ void tds_set_name(uint8_t idx, char *name)
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
+//////////////////////////
+//// nacte nazev zarizeni
+void device_get_name(char *name)
+{
+  char t;
+  for (uint8_t i = 0; i < 9; i++)
+  {
+    t = EEPROM.read(my_name  + i);
+    name[i] = t;
+    if (t == 0) break;
+  }
+}
+//// ulozi nazev zarizeni
+void device_set_name(char *name)
+{
+  char t;
+  for (uint8_t i = 0; i < 9; i++)
+  {
+    t = name[i];
+    EEPROM.write(my_name +  i, t);
+    if (t == 0) break;
+  }
+}
+///////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
 void thermostat_get_name(uint8_t idx, char *name)
 {
   char t;
@@ -1176,7 +1200,7 @@ void show_term_prog(void)
   {
     jednotky = c[0];
     desitky = ' ';
-    
+
   }
   else
   {
@@ -1429,7 +1453,8 @@ void loop()
 
     new_parse_at(uart_recv, str1, str2);
     id = atoi(str1);
-
+    cmd[0] = 0;
+    args[0] = 0;
     new_parse_at(str2, cmd, args);
 
     /// AT+255,css,0; nastavi sekundy cas set second
@@ -1469,14 +1494,31 @@ void loop()
       else
         send_at(rsid, cmd, "ERR");
     }
-
+    /////////////////////////////////////
+    ///prikazy pouze pro tuto jednotku
     if (id == rsid)
     {
       ///at+12,ping; //// ping
       strcpy(str1, "ping");
       if (strcmp(cmd, str1) == 0)
       {
-        strcpy(str2, "OK");
+        strcpy(str2, "room-control OK");
+        send_at(rsid, cmd, str2);
+      }
+      //////////////////////////////////////////////////////////////
+      ///at+12,sdn,XXXXXXXXX; nastavi zarizeni nazev
+      strcpy(str1, "sdn");
+      if (strcmp(cmd, str1) == 0)
+      {
+        device_set_name(args);
+        send_at(rsid, cmd, "OK");
+      }
+      //////////////////////////////////////////////
+      ///at+12,gdn;
+      strcpy(str1, "gdn");
+      if (strcmp(cmd, str1) == 0)
+      {
+        device_get_name(str2);
         send_at(rsid, cmd, str2);
       }
       //////////////////////////////////////////////////////////////////////////////////
@@ -1484,24 +1526,29 @@ void loop()
       strcpy(str1, "gt");
       if (strcmp(cmd, str1) == 0)
       {
-        uint8_t tmp2 = atoi(args);
-        get_tds18s20(tmp2, &tds);
-        if ((tds.used == 1) && (status_tds18s20[tmp2].online == True))
+        if (strlen(args) > 0)
         {
-          int tt = status_tds18s20[tmp2].temp / 100;
-          itoa(tt, str1, 10);
-          strcpy(str2, args);
-          strcat(str2, ",");
-          strcat(str2, str1);
-          send_at(rsid, cmd, str2);
+          uint8_t tmp2 = atoi(args);
+          get_tds18s20(tmp2, &tds);
+          if ((tds.used == 1) && (status_tds18s20[tmp2].online == True))
+          {
+            int tt = status_tds18s20[tmp2].temp;
+            itoa(tt, str1, 10);
+            strcpy(str2, args);
+            strcat(str2, ",");
+            strcat(str2, str1);
+            send_at(rsid, cmd, str2);
+          }
+          else
+          { ///// nenalezeno a nebo offline
+            strcpy(str2, args);
+            strcat(str2, ",");
+            strcat(str2, "ERR");
+            send_at(rsid, cmd, str2);
+          }
         }
         else
-        { ///// nenalezeno a nebo offline
-          strcpy(str2, args);
-          strcat(str2, ",");
-          strcat(str2, "ERR");
-          send_at(rsid, cmd, str2);
-        }
+          send_at(rsid, cmd, "ERR");
       }
       ///////////////////////////////////////////////////////////////////////////////////
       ///AT+2,wc; vrati pocet 1w cidel ;wire count
@@ -1512,7 +1559,7 @@ void loop()
         itoa(Global_HWwirenum, str1, 10);
         send_at(rsid, cmd, str1);
       }
-      /////////
+      ////////////////////////////////////////////////////////////////////
       /// AT+2,wm; vrati rom adresy
       strcpy(str1, "wm");
       if (strcmp(cmd, str1) == 0)
@@ -1541,6 +1588,7 @@ void loop()
         if ( strlen(str2) < 10)
         {
           thermostat_set_name(atoi(str3), str2);
+          send_at(rsid, cmd, "OK");
         }
       }
       //////////////////////////////////////
@@ -1548,8 +1596,13 @@ void loop()
       strcpy(str1, "gtn");
       if (strcmp(cmd, str1) == 0)
       {
-        thermostat_get_name(atoi(args), str3);
-        send_at(rsid, cmd, str3);
+        if (strlen(args) > 0)
+        {
+          thermostat_get_name(atoi(args), str3);
+          send_at(rsid, cmd, str3);
+        }
+        else
+          send_at(rsid, cmd, "ERR");
       }
       /////////////////////////////////////////
       ///at+12,gtp,id; /// ziska nastaveny program id
@@ -1559,17 +1612,16 @@ void loop()
         itoa(thermostat_get_program_id(atoi(args)), str3, 10);
         send_at(rsid, cmd, str3);
       }
-      ////
+      //////////////////////////////////////////////////////////////////////
       ///at+12,stp,idterm,idprog /// nastavi pro program id pro termostat
       strcpy(str1, "stp");
       if (strcmp(cmd, str1) == 0)
       {
         new_parse_at(args, str3, str2);
         thermostat_set_program_id(atoi(str3), atoi(str2));
+        send_at(rsid, cmd, "OK");
       }
-
-
-
+      //////////////////////////////////////////////////////////////////////
       ///at+12,skm,ID; nastavi mac adresu 1wire do znamych tds
       strcpy(str1, "skm");
       if (strcmp(cmd, str1) == 0)
@@ -1585,12 +1637,13 @@ void loop()
               for (uint8_t i = 0; i < 8; i++)
                 tds.rom[i] = w_rom[atoi(args)].rom[i];
               set_tds18s20(idx, &tds);
+              send_at(rsid, cmd, "OK");
               break;
             }
           }
         }
       }
-      /////////////////
+      ////////////////////////////////////////////////////////////////////
       ///at+12,skn,ID,XXXX; ///nastavi nazev cidlu
       strcpy(str1, "skn");
       if (strcmp(cmd, str1) == 0)
@@ -1599,8 +1652,9 @@ void loop()
         get_tds18s20(atoi(str3), &tds);
         strcpy(tds.name, str2);
         set_tds18s20(atoi(str3), &tds);
+        send_at(rsid, cmd, "OK");
       }
-      ///////////////////////////
+      ////////////////////////////////////////////////////////////////////
       ///at+12,gkn,ID; ///zjisti nazev cidla
       strcpy(str1, "gkn");
       if (strcmp(cmd, str1) == 0)
@@ -1608,7 +1662,7 @@ void loop()
         get_tds18s20(atoi(args), &tds);
         send_at(rsid, cmd, tds.name);
       }
-      //////////////////////////
+      //////////////////////////////////////////////////////////////////
       ///at+12,ckm,ID; vymaze rom adresu ze znamych tds
       strcpy(str1, "ckm");
       if (strcmp(cmd, str1) == 0)
@@ -1618,43 +1672,60 @@ void loop()
           get_tds18s20(atoi(args), &tds);
           tds.used = 0;
           set_tds18s20(atoi(args), &tds);
+          send_at(rsid, cmd, "OK");
         }
       }
-      ////////////////////////////////////
+      ////////////////////////////////////////////////////////////////////
       ///at+12,stdsoffset,ID,xxxx; nastavi offset cidlu
       strcpy(str1, "stdsoffset");
       if (strcmp(cmd, str1) == 0)
       {
+        str3[0] = 0;
+        str2[0] = 0;
         new_parse_at(args, str3, str2);
-        get_tds18s20(atoi(str3), &tds);
-        tds.offset = atoi(str2);
-        set_tds18s20(atoi(str3), &tds);
+        if ((strlen(str3) > 0 && strlen(str2)) > 0)
+        {
+          get_tds18s20(atoi(str3), &tds);
+          tds.offset = atoi(str2);
+          set_tds18s20(atoi(str3), &tds);
+          send_at(rsid, cmd, "OK");
+        }
+        else
+          send_at(rsid, cmd, "ERR");
       }
-      /////////////////////////////////////
+      ////////////////////////////////////////////////////////////////////
       ///at+12,gtdsoffset,ID; ziska nastaveny offset
       strcpy(str1, "gtdsoffset");
       if (strcmp(cmd, str1) == 0)
       {
-        get_tds18s20(atoi(str3), &tds);
-        itoa(tds.offset, str3, 10);
-        send_at(rsid, cmd, str3);
+        if (strlen(args) > 0)
+        {
+          get_tds18s20(atoi(args), &tds);
+          itoa(tds.offset, str2, 10);
+          strcat(args, ",");
+          strcat(args, str2);
+          send_at(rsid, cmd, str3);
+        }
+        else
+          send_at(rsid, cmd, "ERR");
       }
-      /////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////
       ///at+12,spc,COUNT; nastavi pocet dostupnych programu
       strcpy(str1, "spc");
       if (strcmp(cmd, str1) == 0)
       {
         max_program = atoi(args);
         thermostat_set_max_program();
+        send_at(rsid, cmd, "OK");
       }
-      //////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////
       strcpy(str1, "gpc"); ///ziska pocet nastavenych programu
       if (strcmp(cmd, str1) == 0)
       {
         itoa(max_program, str3, 10);
         send_at(rsid, cmd, str3);
       }
-      ////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////
       strcpy(str1, "gtm");  /// at+12,gtm; ziska nastaveny term_mode
       if (strcmp(cmd, str1) == 0)
       {
@@ -1662,11 +1733,12 @@ void loop()
         itoa(term_mode, str3, 10);
         send_at(rsid, cmd, str3);
       }
-      ///////////////////////////////////////////
+      /////////////////////////////////////////////////////////////////////
       strcpy(str1, "stm"); /// at+12,stm,ID; nastavi nastaveny term_mode
       if (strcmp(cmd, str1) == 0)
       {
         thermostat_set_mode(atoi(args));
+        send_at(rsid, cmd, "OK");
       }
       //////////////////////////////////////////////////////
       ///at+12,spwm,VAL
@@ -1674,6 +1746,7 @@ void loop()
       if (strcmp(cmd, str1) == 0)
       {
         analogWrite(PWM, atoi(args));
+        send_at(rsid, cmd, "OK");
       }
 
     }
