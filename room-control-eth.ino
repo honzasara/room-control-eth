@@ -11,6 +11,7 @@
 #include "font_alfa.h"
 #include "Font5x8.h"
 #include <avr/wdt.h>
+#include <avr/boot.h>
 
 #include <RTClib.h>
 #include <saric_ds2482.h>
@@ -32,6 +33,7 @@
 #define TERM_STAV_STOP 0
 #define TERM_STAV_TOPI 1
 #define TERM_OK 2
+#define TERM_CLIMA 2
 
 #define TERM_MODE_OFF 0
 #define TERM_MODE_MAX 1
@@ -107,7 +109,7 @@
 #define TL_OFF   0b10000000
 #define TL_MAX   0b01000000
 #define TL_PROG  0b00100000
-#define TL_STAV  0b00001000
+#define TL_CLIMA  0b00001000
 #define TL_OK    0b00000100
 #define TL_DOWN  0b00000010
 #define TL_UP    0b00000001
@@ -116,7 +118,7 @@
 #define LED_OFF  0b10000000
 #define LED_MAX 0b01000000
 #define LED_PROG  0b00100000
-#define LED_STAV 0b00010000
+#define LED_CLIMA 0b00010000
 #define LED_OK   0b00001000
 #define LED_DOWN 0b00000100
 #define LED_UP   0b00000010
@@ -239,7 +241,7 @@ struct_status_DDS18s20 status_tds18s20[HW_ONEWIRE_MAXROMS];
 uint8_t last_sync = 0;
 uint8_t Global_HWwirenum = 0;
 uint8_t tmp_rom[8];
-uint8_t key, delay_key, press_key;
+uint8_t key, key_now, key_press, key_press_cnt;
 uint8_t led, led_old;
 volatile uint8_t rsid;
 uint8_t ppwm = 0;
@@ -281,69 +283,86 @@ char uart_recv[UART_RECV_MAX_SIZE];
   const char at_term_ring_prog[] PROGMEM = "term/ring/prog";
 */
 
-const char title_root_climate[] PROGMEM = "Clima";
-const char title_root_termostat[] PROGMEM = "Trmst";
-const char title_root_fastsette[] PROGMEM = "FstSt";
-const char title_root_termprog[] PROGMEM = "TrmProg";
-const char title_root_termmax[] PROGMEM = "TrmMax";
-const char title_root_termoff[] PROGMEM = "TrmOff";
+//const char title_error[] PROGMEM = "error";
 
-const char title_root_setup_menu[] PROGMEM = "Setup";
-const char title_error[] PROGMEM = "error";
-
+const char title_root_termostat[] PROGMEM = "Term";
 const char title_item_menu_temp[] PROGMEM = "Teplota";
 const char title_item_menu_time[] PROGMEM = "Cas";
 const char title_item_menu_termstav[] PROGMEM = "TermStav";
 
-const   char title_item_menu_termset[] PROGMEM = "Termset";
+/*
+  const char title_root_climate[] PROGMEM = "T Min";
+  const char title_root_fastsette[] PROGMEM = "FstSt";
+  const char title_root_termprog[] PROGMEM = "T Prog";
+  const char title_root_termmax[] PROGMEM = "T Max";
+  const char title_root_termoff[] PROGMEM = "T Off";
+  /*
 
-const char title_item_menu_setup_bus[] PROGMEM =  "RS485";
-const char title_item_menu_setup_jas[] PROGMEM =  "n JAS ";
-const char title_item_menu_back[] PROGMEM = " ZPET ";
-//const char title_item_setup_rs_id[] PROGMEM  = "nRS $$";
-const char title_item_setup_jas[] PROGMEM  = "JAS $$";
+
+  const char title_root_setup_menu[] PROGMEM = "Setup";
+
+
+
+
+  const   char title_item_menu_termset[] PROGMEM = "Termset";
+
+  const char title_item_menu_setup_bus[] PROGMEM =  "RS485";
+  const char title_item_menu_setup_jas[] PROGMEM =  "n JAS ";
+  const char title_item_menu_back[] PROGMEM = " ZPET ";
+  //const char title_item_setup_rs_id[] PROGMEM  = "nRS $$";
+  const char title_item_setup_jas[] PROGMEM  = "JAS $$";
+*/
+
+
 
 const char mqtt_header[] PROGMEM  = "/thermctl/";
-char external_text[8];
+char led_display_text[8];
 
 
 
-
-
-
-
-
-RootMenu rm;
-RootMenu term_fast_set;
-
-RootMenu term_max;
-RootMenu term_climate;
-RootMenu term_off;
-RootMenu term_prog;
-RootMenu setup_menu;
-RootMenu setup_menu_rs_id;
-RootMenu setup_menu_rs_jas;
-
-
-RootMenu rm_error;
-
-ItemMenu menu_show_time,   menu_show_termstav;
-ItemMenu menu_show_temp;
-
-ItemMenu menu_show_term_set_global;
-ItemMenu menu_show_term_max;
-ItemMenu menu_show_term_climate;
-ItemMenu menu_show_term_off;
-ItemMenu menu_show_term_prog;
-
-ItemMenu menu_setup_bus, menu_setup_jas, menu_back;
-
-ItemMenu menu_setup_rs_id, menu_setup_set_jas;
-
-ItemMenu item_error;
 
 Struct_RootHistory RootHistory;
 
+
+RootMenu rm;
+ItemMenu menu_show_temp;
+ItemMenu menu_show_time;
+ItemMenu menu_show_termstav;
+
+/*
+  RootMenu term_fast_set;
+  RootMenu term_max;
+  RootMenu term_climate;
+  RootMenu term_off;
+  RootMenu term_prog;
+*/
+/*
+
+
+  RootMenu setup_menu;
+  RootMenu setup_menu_rs_id;
+  RootMenu setup_menu_rs_jas;
+
+
+  RootMenu rm_error;
+
+  ItemMenu menu_show_time,   menu_show_termstav;
+  ItemMenu menu_show_temp;
+
+  ItemMenu menu_show_term_set_global;
+  ItemMenu menu_show_term_max;
+  ItemMenu menu_show_term_climate;
+  ItemMenu menu_show_term_off;
+  ItemMenu menu_show_term_prog;
+
+  ItemMenu menu_setup_bus, menu_setup_jas, menu_back;
+
+  ItemMenu menu_setup_rs_id, menu_setup_set_jas;
+
+  ItemMenu item_error;
+
+
+*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //// primitivni funkce
@@ -585,7 +604,7 @@ void menu_display(void)
     {
       if (tmp[i] == '$')
       {
-        tmp[i] = external_text[t];
+        tmp[i] = led_display_text[t];
         t++;
       }
     }
@@ -863,7 +882,7 @@ void mqtt_reconnect(void)
 {
   char nazev[10];
   char topic[20]; ///  /thermctl/xxxxxxxx/#
-                ///  /thermctl/all/#
+  ///  /thermctl/all/#
   device_get_name(*nazev);
   mqtt_client.connect(nazev);
   strcpy_P(topic, mqtt_header);
@@ -886,11 +905,17 @@ void glcd_init_header(void)
   GLCD_PrintString("inicializace");
 }
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void ethloop(void)
+{
+  mqtt_client.loop();
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup(void) {
   char tmp1[20];
   char tmp2[20];
   uint8_t itmp;
+
 
   struct_DDS18s20 tds;
   // put your setup code here, to run once:
@@ -922,80 +947,99 @@ void setup(void) {
 
 
   menu_history_init(&rm);
-
   menu_init(&rm);
-  menu_init(&term_fast_set);
-
-  menu_init(&term_max);
-  menu_init(&term_off);
-  menu_init(&term_prog);
-  menu_init(&setup_menu);
-
-  menu_init(&setup_menu_rs_id);
-  menu_init(&setup_menu_rs_jas);
-
-  menu_init(&rm_error);
-
   menu_root_setname(&rm, title_root_termostat);
-  menu_root_setname(&term_fast_set, title_root_fastsette);
-  menu_root_setname(&term_prog, title_root_termprog);
-  menu_root_setname(&term_max, title_root_termmax);
-  menu_root_setname(&term_climate, title_root_climate);
-  menu_root_setname(&term_off, title_root_termoff);
-  menu_root_setname(&setup_menu, title_root_setup_menu);
-  menu_root_setname(&setup_menu_rs_id, title_item_menu_setup_bus);
-  menu_root_setname(&setup_menu_rs_jas, title_item_menu_setup_jas);
 
-  menu_root_setname(&rm_error, title_error);
 
   menu_item_set_properties(&menu_show_temp, title_item_menu_temp, show_temp_default);
   menu_item_set_properties(&menu_show_time, title_item_menu_time, show_time);
-  menu_item_set_properties(&menu_show_term_set_global, title_item_menu_termset, show_term_set_global);
   menu_item_set_properties(&menu_show_termstav, title_item_menu_termstav, show_termstav);
-
-  menu_item_set_properties(&menu_show_term_max, title_root_termmax, show_term_max);
-  menu_item_set_properties(&menu_show_term_climate, title_root_climate, show_term_climate);
-  menu_item_set_properties(&menu_show_term_off, title_root_termoff, show_term_off);
-  menu_item_set_properties(&menu_show_term_prog, title_root_termprog, show_term_prog);
-
-  menu_item_set_properties(&menu_setup_jas, title_item_menu_setup_jas , nullptr);
-  menu_item_set_properties(&menu_setup_bus, title_item_menu_setup_bus, nullptr);
-  menu_item_set_properties(&menu_back, title_item_menu_back, back);
-
-
-  //menu_item_set_properties(&menu_setup_rs_id, title_item_setup_rs_id, nullptr);
-  menu_item_set_properties(&menu_setup_set_jas, title_item_setup_jas, nullptr);
-
-
-
-  menu_item_set_properties(&item_error, title_error, f_error);
-
 
   menu_root_additem(&rm, &menu_show_time);
   menu_root_additem(&rm, &menu_show_temp);
   menu_root_additem(&rm, &menu_show_termstav);
-  menu_root_additem(&term_fast_set, &menu_show_term_set_global);
 
 
-  menu_root_additem(&term_prog, &menu_show_term_prog);
-  menu_root_additem(&term_max, &menu_show_term_max);
-  menu_root_additem(&term_off, &menu_show_term_off);
-  menu_root_additem(&term_climate, &menu_show_term_climate);
 
-  menu_root_additem(&setup_menu, &menu_setup_jas);
-  menu_root_additem(&setup_menu, &menu_setup_bus);
-  menu_root_additem(&setup_menu, &menu_back);
+  /*
+    menu_init(&term_fast_set);
+    menu_init(&term_max);
+    menu_init(&term_off);
+    menu_init(&term_prog);
+    menu_init(&term_climate);
 
 
-  menu_root_additem(&setup_menu_rs_id, &menu_setup_rs_id);
-  menu_root_additem(&setup_menu_rs_jas, &menu_setup_set_jas);
+    menu_root_setname(&term_fast_set, title_root_fastsette);
+    menu_root_setname(&term_prog, title_root_termprog);
+    menu_root_setname(&term_max, title_root_termmax);
+    menu_root_setname(&term_climate, title_root_climate);
+    menu_root_setname(&term_off, title_root_termoff);
+  */
+  /*
 
-  menu_root_additem(&rm_error, &item_error);
 
+    menu_init(&setup_menu);
+
+    menu_init(&setup_menu_rs_id);
+    menu_init(&setup_menu_rs_jas);
+
+    menu_init(&rm_error);
+
+    ;
+    menu_root_setname(&setup_menu, title_root_setup_menu);
+    menu_root_setname(&setup_menu_rs_id, title_item_menu_setup_bus);
+    menu_root_setname(&setup_menu_rs_jas, title_item_menu_setup_jas);
+
+    menu_root_setname(&rm_error, title_error);
+
+
+    menu_item_set_properties(&menu_show_term_set_global, title_item_menu_termset, show_term_set_global);
+    menu_item_set_properties(&menu_show_termstav, title_item_menu_termstav, show_termstav);
+
+    menu_item_set_properties(&menu_show_term_max, title_root_termmax, show_term_max);
+    menu_item_set_properties(&menu_show_term_climate, title_root_climate, show_term_climate);
+    menu_item_set_properties(&menu_show_term_off, title_root_termoff, show_term_off);
+    menu_item_set_properties(&menu_show_term_prog, title_root_termprog, show_term_prog);
+
+    menu_item_set_properties(&menu_setup_jas, title_item_menu_setup_jas , nullptr);
+    menu_item_set_properties(&menu_setup_bus, title_item_menu_setup_bus, nullptr);
+    menu_item_set_properties(&menu_back, title_item_menu_back, back);
+
+
+    //menu_item_set_properties(&menu_setup_rs_id, title_item_setup_rs_id, nullptr);
+    menu_item_set_properties(&menu_setup_set_jas, title_item_setup_jas, nullptr);
+
+
+
+    menu_item_set_properties(&item_error, title_error, f_error);
+
+
+    menu_root_additem(&term_fast_set, &menu_show_term_set_global);
+
+
+    menu_root_additem(&term_prog, &menu_show_term_prog);
+    menu_root_additem(&term_max, &menu_show_term_max);
+    menu_root_additem(&term_off, &menu_show_term_off);
+    menu_root_additem(&term_climate, &menu_show_term_climate);
+
+    menu_root_additem(&setup_menu, &menu_setup_jas);
+    menu_root_additem(&setup_menu, &menu_setup_bus);
+    menu_root_additem(&setup_menu, &menu_back);
+
+
+    menu_root_additem(&setup_menu_rs_id, &menu_setup_rs_id);
+    menu_root_additem(&setup_menu_rs_jas, &menu_setup_set_jas);
+
+    menu_root_additem(&rm_error, &item_error);
+  */
 
   ds2482_address[0].i2c_addr = 0b0011000;
   ds2482_address[0].HWwirenum = 0;
   ds2482_address[0].hwwire_cekam = false;
+
+  noInterrupts();           // disable all interrupts
+  //pinMode(ETH_INT, INPUT_PULLUP);
+
 
   pinMode(LED, OUTPUT);
 
@@ -1026,7 +1070,7 @@ void setup(void) {
 
   //digitalWrite(rs485, LOW);
 
-  noInterrupts();           // disable all interrupts
+
   TCCR3A = 0;
   TCCR3B  = (1 << CS31);
   timer3_counter = 61100;/// cca 450Hz
@@ -1246,7 +1290,7 @@ void setup(void) {
       GLCD_flip();
       GLCD_Render();
       Ethernet.begin(device.mac, device.myIP, device.myDNS, device.myGW, device.myMASK);
-      
+
     }
 
     if (inic == 9)
@@ -1271,7 +1315,7 @@ void setup(void) {
     delay(1000);
   }
 
-
+  //attachInterrupt(digitalPinToInterrupt(ETH_INT), ethloop, FALLING);
 }
 ///konec setup
 
@@ -1495,13 +1539,15 @@ void set_term_global(uint8_t key, uint8_t term_id)
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void show_term_set_global(void)
-{
+/*
+  void show_term_set_global(void)
+  {
   show_term_set_global_id(0);
-}
-
-void show_term_set_global_id(uint8_t id)
-{
+  }
+*/
+/*
+  void show_term_set_global_id(uint8_t id)
+  {
   /// todo nejak vyresit predani pres parametr ///
   uint8_t term_id = term_fast_set.args1;
   char tmp[10];
@@ -1559,11 +1605,13 @@ void show_term_set_global_id(uint8_t id)
   tisice = tmp[2];
   destisice = tmp[1];
   statisice = tmp[0];
-}
+  }
+*/
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void show_term_max(void)
-{
+/*
+  void show_term_max(void)
+  {
   tecka = 0b00000000;
   jednotky = ' ';
   desitky = ' ';
@@ -1571,10 +1619,10 @@ void show_term_max(void)
   tisice = 'A';
   destisice = 'M';
   statisice = ' ';
-}
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void show_term_climate(void)
-{
+  }
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  void show_term_climate(void)
+  {
   tecka = 0b00000000;
   jednotky = ' ';
   desitky = ' ';
@@ -1582,11 +1630,11 @@ void show_term_climate(void)
   tisice = 'I';
   destisice = 'M';
   statisice = ' ';
-}
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void show_term_off(void)
-{
+  }
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  void show_term_off(void)
+  {
   tecka = 0b00000000;
   jednotky = ' ';
   desitky = ' ';
@@ -1594,7 +1642,8 @@ void show_term_off(void)
   tisice = 'F';
   destisice = 'O';
   statisice = ' ';
-}
+  }
+*/
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void show_term_prog(void)
 {
@@ -1816,32 +1865,32 @@ uint8_t Bit_Reverse( uint8_t x )
 
 
 
-void external_text_2(uint8_t input)
+void led_display_text_2(uint8_t input)
 {
   char c[4];
-  external_text[0] = 0;
-  if (input < 10) strcpy(external_text, " ");
+  led_display_text[0] = 0;
+  if (input < 10) strcpy(led_display_text, " ");
   itoa(input, c, 10);
-  strcat(external_text, c);
+  strcat(led_display_text, c);
   tecka = 0;
 }
 
-void external_text_string(char *input)
+void led_display_text_string(char *input)
 {
-  external_text[0] = 0;
-  if (strlen(input) < 2) strcpy(external_text, " ");
-  strcat(external_text, input);
+  led_display_text[0] = 0;
+  if (strlen(input) < 2) strcpy(led_display_text, " ");
+  strcat(led_display_text, input);
   tecka = 0;
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void f_error(void)
 {
-  jednotky = external_text[5];
-  desitky = external_text[4];
-  stovky = external_text[3];
-  tisice = external_text[2];
-  destisice = external_text[1];
-  statisice = external_text[0];
+  jednotky = led_display_text[5];
+  desitky = led_display_text[4];
+  stovky = led_display_text[3];
+  tisice = led_display_text[2];
+  destisice = led_display_text[1];
+  statisice = led_display_text[0];
 }
 
 
@@ -1870,18 +1919,20 @@ void loop()
 
 
 
+  /*
+    if ( Enc28J60Network::linkStatus() == 1)
+      statisice = 'A';
+    else
+      statisice = 'E';
+  */
 
-  //if ( Enc28J60Network::linkStatus() == 1)
-  //  statisice = 'A';
-  //else
-  //  statisice = 'E';
+  if (!mqtt_client.connected()) {
+    mqtt_reconnect();
+  }
+  mqtt_client.loop();
 
-  
-    if (!mqtt_client.connected()) {
-      mqtt_reconnect();
-    }
-    mqtt_client.loop();
-  
+
+
 
   /*
     read_at(uart_recv);
@@ -1906,73 +1957,36 @@ void loop()
   */
 
 
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-
-
   led = 0;
   led_old = 0;
   key = 0;
-  delay_key = ~Bit_Reverse(read_from_mcp());
-  if (delay_key != 0)
+  key_now = ~Bit_Reverse(read_from_mcp());
+
+  if (key_now != 0)
   {
     if ((milis - milis_key) > 100)
     {
       milis_key = milis;
-      press_key = delay_key;
+      key = key_now;
+      key_press_cnt++;
+      if (key_press_cnt > 5)
+        {
+          key_press_cnt = 0;
+          key_press = key_now;
+          }
     }
   }
-  if (delay_key == 0 && press_key != 0 )
+  else
   {
-    key = press_key;
-    press_key = 0;
+    key_press = 0;
+    key_press_cnt = 0;
   }
-
-
-  /*
-    if ((key & TL_OFF) != 0)
-    {
-    led = led + LED_OFF;
-    }
-
-    if ((key & TL_PROG) != 0)
-    {
-    led = led + LED_PROG;
-    }
-
-    if ((key & TL_MAX) != 0)
-    {
-    led = led + LED_MAX;
-    }
-
-    if ((key & TL_STAV) != 0)
-    {
-    led = led + LED_STAV;
-    }
-
-    if ((key & TL_OK) != 0)
-    {
-    led = led + LED_OK;
-    }
-
-    if ((key & TL_DOWN) != 0)
-    {
-    led = led + LED_DOWN;
-    }
-
-    if ((key & TL_UP) != 0)
-    {
-    led = led + LED_UP;
-    }
-  */
 
 
   if (last_sync > 100)
   {
     led = led + LED_ERR;
   }
-
-  //Serial.println(rsid);
 
   thermostat_get_mode();
   if (term_mode == TERM_MODE_OFF) led = led + LED_OFF;
@@ -1988,222 +2002,24 @@ void loop()
     write_to_mcp(~led);
   }
 
-  ///globalni back
-  if (strcmp_P(curr_item, title_item_menu_back) == 0)
-  {
-    if (key == TL_OK)
-    {
-      menu_back_root_menu();
-      key = 0;
-    }
-  }
+
+
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+
+
 
   //// defualt screen uplne hlavni menu
   if (strcmp_P(curr_menu, title_root_termostat) == 0)
   {
-    //// hotkeys pridej/uber okamzitou teplotu
-    if ((key == TL_UP) || (key == TL_DOWN))
-    {
-      thermostat_set_mode(TERM_MODE_MAN);
-      delay_show_menu = 0;
-      menu_set_root_menu(&term_fast_set);
-      key = 0;
-    }
     /// prepinej zobrazeni cas/teplota/stav termostatu
-    if (key == TL_STAV)
+    if (key == TL_OK)
     {
       menu_rotate();
       key = 0;
     }
-    //// prepnuti do menu setup
-    if (key == TL_OK)
-    {
-      menu_set_root_menu(&setup_menu);
-      key = 0;
-    }
-    //// hotkeys menu vupnuti termostatu
-    if (key == TL_OFF)
-    {
-      thermostat_set_mode(TERM_MODE_OFF);
-      menu_set_root_menu(&term_off);
-      delay_show_menu = 0;
-      key = 0;
-    }
-    //// hotkeys top na maximalni teplotu
-    if (key == TL_MAX)
-    {
-      thermostat_set_mode(TERM_MODE_MAX);
-      delay_show_menu = 0;
-      menu_set_root_menu(&term_max);
-      key = 0;
-    }
-    //// hotkeys prepni program
-    if (key == TL_PROG)
-    {
-      thermostat_set_mode(TERM_MODE_PROG);
-      delay_show_menu = 0;
-      menu_set_root_menu(&term_prog);
-      key = 0;
-    }
-
-    if (key == (TL_MAX + TL_PROG))
-    {
-      thermostat_set_mode(TERM_MODE_CLIMATE);
-      delay_show_menu = 0;
-      menu_set_root_menu(&term_climate);
-      key = 0;
-    }
-  }
-  //// menu termostat off
-  if (strcmp_P(curr_menu, title_root_termoff) == 0)
-  {
-    if (key == TL_OFF)
-    {
-      menu_back_root_menu();
-      key = 0;
-    }
-  }
-  //// menu termostat max
-  if (strcmp_P(curr_menu, title_root_termmax) == 0)
-  {
-    if (key == TL_MAX)
-    {
-      menu_back_root_menu();
-      key = 0;
-    }
-  }
-  //// menu termostat climate
-  if (strcmp_P(curr_menu, title_root_climate) == 0)
-  {
-    if (key == (TL_MAX + TL_PROG))
-    {
-      menu_back_root_menu();
-      key = 0;
-    }
-  }
-  //// menu termostat program
-  if (strcmp_P(curr_menu, title_root_termprog) == 0)
-  {
-    set_term_prog(key);
-    if (key == TL_PROG)
-    {
-      menu_back_root_menu();
-      key = 0;
-    }
-  }
-  //// menu pridej/uber okamzitou teplotu
-  if (strcmp_P(curr_menu, title_root_fastsette) == 0)
-  {
-    set_term_global(key, 0);
-    if (key == TL_OK)
-    {
-      menu_back_root_menu();
-      key = 0;
-    }
-  }
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-  //////////////////// hlavni setup menu
-  if (strcmp_P(curr_menu, title_root_setup_menu) == 0)
-  {
-    if (key == TL_UP) menu_next();
-    if (key == TL_DOWN) menu_prev();
-    ////
-    if (key == TL_OK)
-    {
-      /// podmenu rs485
-      if (strcmp_P(curr_item, title_item_menu_setup_bus) == 0)
-      {
-        menu_set_root_menu(&setup_menu_rs_id);
-        setup_menu_rs_id.args1 = rsid;
-        key = 0;
-      }
-      /// podmenu jas
-      if (strcmp_P(curr_item, title_item_menu_setup_jas) == 0)
-      {
-        menu_set_root_menu(&setup_menu_rs_jas);
-        setup_menu_rs_jas.args1 = (255 - jas_disp) / 15;
-        key = 0;
-      }
-    }
-  }
-  /// konec hlavniho setup menu
-  /////////////////////////////
-  //////////////////////////////////////////////////////////////////////////////////////////
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-  /// nastaveni jasu
-  if (strcmp_P(curr_menu, title_item_menu_setup_jas) == 0)
-  {
-    if (strcmp_P(curr_item, title_item_setup_jas) == 0)
-    {
-      uint8_t tmp8_1 = setup_menu_rs_jas.args1;
-      if (key == TL_MAX)
-      {
-        if (tmp8_1 < 17)tmp8_1++;
-      }
-      if (key == TL_OFF)
-      {
-        if (tmp8_1 > 1)tmp8_1--;
-      }
-      setup_menu_rs_jas.args1 = tmp8_1;
-      jas_disp = 255 - (15 * tmp8_1);
-      if (tmp8_1 == 17)
-      {
-        /// auto jas
-        external_text_string("A");
-      }
-      else
-      {
-        /// manualni jas
-        external_text_2(tmp8_1);
-        analogWrite(PWM_DISP, jas_disp);
-      }
-      if (key == TL_OK)
-      {
-        EEPROM.write(my_jas_disp, jas_disp);
-        menu_back_root_menu();
-      }
-    }
   }
 
-  /////////////////////////
-  /*
-    get_current_menu(curr_menu);
-    get_current_item(curr_item);
-    /// nasteveni rs id
-    if (strcmp_P(curr_menu, title_item_menu_setup_bus) == 0)
-    {
-    if (strcmp_P(curr_item, title_item_setup_rs_id) == 0)
-    {
-      char tmp8_1 = setup_menu_rs_id.args1;
-      if (key == TL_MAX)
-      {
-        tmp8_1++;
-        if (tmp8_1 > 31) tmp8_1 = 0;
-      }
-      if (key == TL_OFF)
-      {
-        tmp8_1--;
-        if (tmp8_1 < 0) tmp8_1 = 31;
-      }
-      external_text_2(tmp8_1);
-      setup_menu_rs_id.args1 = uint8_t(tmp8_1);
-
-      ///
-      if (key == TL_OK)
-      {
-        menu_back_root_menu();
-        rsid = uint8_t(tmp8_1);
-        EEPROM.write(my_rs_id, rsid);
-        key = 0;
-      }
-    }
-    }
-    //// konec nastaveni rs id
-    ///////////////////////////////////////////////
-  */
 
 
 
@@ -2240,38 +2056,7 @@ void loop()
       if (itmp > 240) itmp = 240;
       analogWrite(PWM_DISP, itmp);
     }
-    ;
-    /// vraceni se zpet po 10 sec
-    if (strcmp_P(curr_menu, title_root_fastsette) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 10) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_root_termoff) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 5) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_root_termmax) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 5) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_root_termprog) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 10) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_root_climate) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 10) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_error) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 2) menu_back_root_menu();
-    }
+
   }
 
 }
@@ -2660,28 +2445,322 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /*
-  void external_text_1_float3(uint8_t input1, float input2)
+  void led_display_text_1_float3(uint8_t input1, float input2)
   {
   char c[4];
-  external_text[0] = 0;
+  led_display_text[0] = 0;
   itoa(input1, c, 10);
-  strcat(external_text, c);
+  strcat(led_display_text, c);
   itoa(input2 * 10, c, 10);
-  strcat(external_text, c);
+  strcat(led_display_text, c);
   tecka = 0b00010000;
   }
 */
 /*
-  void external_text_1_2(uint8_t input1, uint8_t input2, uint8_t mode)
+  void led_display_text_1_2(uint8_t input1, uint8_t input2, uint8_t mode)
   {
   char c[4];
-  external_text[0] = 0;
+  led_display_text[0] = 0;
   itoa(input1, c, 10);
-  strcat(external_text, c);
-  if ((mode == 10) && (input2 < 10)) strcat(external_text, "0");
-  if ((mode == 16) && (input2 < 16)) strcat(external_text, "0");
+  strcat(led_display_text, c);
+  if ((mode == 10) && (input2 < 10)) strcat(led_display_text, "0");
+  if ((mode == 16) && (input2 < 16)) strcat(led_display_text, "0");
   itoa(input2, c, mode);
-  strcat(external_text, c);
+  strcat(led_display_text, c);
   tecka = 0;
+  }
+
+      ;
+    /// vraceni se zpet po 10 sec
+    if (strcmp_P(curr_menu, title_root_fastsette) == 0)
+    {
+      delay_show_menu++;
+      if (delay_show_menu > 10) menu_back_root_menu();
+    }
+    if (strcmp_P(curr_menu, title_root_termoff) == 0)
+    {
+      delay_show_menu++;
+      if (delay_show_menu > 5) menu_back_root_menu();
+    }
+    if (strcmp_P(curr_menu, title_root_termmax) == 0)
+    {
+      delay_show_menu++;
+      if (delay_show_menu > 5) menu_back_root_menu();
+    }
+    if (strcmp_P(curr_menu, title_root_termprog) == 0)
+    {
+      delay_show_menu++;
+      if (delay_show_menu > 10) menu_back_root_menu();
+    }
+    if (strcmp_P(curr_menu, title_root_climate) == 0)
+    {
+      delay_show_menu++;
+      if (delay_show_menu > 10) menu_back_root_menu();
+    }
+    if (strcmp_P(curr_menu, title_error) == 0)
+    {
+      delay_show_menu++;
+      if (delay_show_menu > 2) menu_back_root_menu();
+    }
+*/
+
+/*
+  if ((key & TL_OFF) != 0)
+  {
+  led = led + LED_OFF;
+  }
+
+  if ((key & TL_PROG) != 0)
+  {
+  led = led + LED_PROG;
+  }
+
+  if ((key & TL_MAX) != 0)
+  {
+  led = led + LED_MAX;
+  }
+
+  if ((key & TL_STAV) != 0)
+  {
+  led = led + LED_STAV;
+  }
+
+  if ((key & TL_OK) != 0)
+  {
+  led = led + LED_OK;
+  }
+
+  if ((key & TL_DOWN) != 0)
+  {
+  led = led + LED_DOWN;
+  }
+
+  if ((key & TL_UP) != 0)
+  {
+  led = led + LED_UP;
+  }
+*/
+
+
+/*
+
+  //// hotkeys pridej/uber okamzitou teplotu
+  if ((key == TL_UP) || (key == TL_DOWN))
+  {
+    thermostat_set_mode(TERM_MODE_MAN);
+    delay_show_menu = 0;
+    menu_set_root_menu(&term_fast_set);
+    key = 0;
+  }
+
+  //// prepnuti do menu setup
+  if (key == TL_OK)
+  {
+    menu_set_root_menu(&setup_menu);
+    key = 0;
+  }
+  //// hotkeys menu vupnuti termostatu
+  if (key == TL_OFF)
+  {
+    thermostat_set_mode(TERM_MODE_OFF);
+    menu_set_root_menu(&term_off);
+    delay_show_menu = 0;
+    key = 0;
+  }
+  //// hotkeys top na maximalni teplotu
+  if (key == TL_MAX)
+  {
+    thermostat_set_mode(TERM_MODE_MAX);
+    delay_show_menu = 0;
+    menu_set_root_menu(&term_max);
+    key = 0;
+  }
+  //// hotkeys prepni program
+  if (key == TL_PROG)
+  {
+    thermostat_set_mode(TERM_MODE_PROG);
+    delay_show_menu = 0;
+    menu_set_root_menu(&term_prog);
+    key = 0;
+  }
+
+  if (key == (TL_MAX + TL_PROG))
+  {
+    thermostat_set_mode(TERM_MODE_CLIMATE);
+    delay_show_menu = 0;
+    menu_set_root_menu(&term_climate);
+    key = 0;
+  }
+  }
+
+*/
+
+/////////////////////////
+/*
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  /// nasteveni rs id
+  if (strcmp_P(curr_menu, title_item_menu_setup_bus) == 0)
+  {
+  if (strcmp_P(curr_item, title_item_setup_rs_id) == 0)
+  {
+    char tmp8_1 = setup_menu_rs_id.args1;
+    if (key == TL_MAX)
+    {
+      tmp8_1++;
+      if (tmp8_1 > 31) tmp8_1 = 0;
+    }
+    if (key == TL_OFF)
+    {
+      tmp8_1--;
+      if (tmp8_1 < 0) tmp8_1 = 31;
+    }
+    led_display_text_2(tmp8_1);
+    setup_menu_rs_id.args1 = uint8_t(tmp8_1);
+
+    ///
+    if (key == TL_OK)
+    {
+      menu_back_root_menu();
+      rsid = uint8_t(tmp8_1);
+      EEPROM.write(my_rs_id, rsid);
+      key = 0;
+    }
+  }
+  }
+  //// konec nastaveni rs id
+  ///////////////////////////////////////////////
+*/
+
+
+/*
+  //// menu termostat off
+  if (strcmp_P(curr_menu, title_root_termoff) == 0)
+  {
+  if (key == TL_OFF)
+  {
+    menu_back_root_menu();
+    key = 0;
+  }
+  }
+  //// menu termostat max
+  if (strcmp_P(curr_menu, title_root_termmax) == 0)
+  {
+  if (key == TL_MAX)
+  {
+    menu_back_root_menu();
+    key = 0;
+  }
+  }
+  //// menu termostat climate
+  if (strcmp_P(curr_menu, title_root_climate) == 0)
+  {
+  if (key == (TL_MAX + TL_PROG))
+  {
+    menu_back_root_menu();
+    key = 0;
+  }
+  }
+  //// menu termostat program
+  if (strcmp_P(curr_menu, title_root_termprog) == 0)
+  {
+  set_term_prog(key);
+  if (key == TL_PROG)
+  {
+    menu_back_root_menu();
+    key = 0;
+  }
+  }
+  //// menu pridej/uber okamzitou teplotu
+  if (strcmp_P(curr_menu, title_root_fastsette) == 0)
+  {
+  set_term_global(key, 0);
+  if (key == TL_OK)
+  {
+    menu_back_root_menu();
+    key = 0;
+  }
+  }
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  //////////////////// hlavni setup menu
+  if (strcmp_P(curr_menu, title_root_setup_menu) == 0)
+  {
+  if (key == TL_UP) menu_next();
+  if (key == TL_DOWN) menu_prev();
+  ////
+  if (key == TL_OK)
+  {
+    /// podmenu rs485
+    if (strcmp_P(curr_item, title_item_menu_setup_bus) == 0)
+    {
+      menu_set_root_menu(&setup_menu_rs_id);
+      setup_menu_rs_id.args1 = rsid;
+      key = 0;
+    }
+    /// podmenu jas
+    if (strcmp_P(curr_item, title_item_menu_setup_jas) == 0)
+    {
+      menu_set_root_menu(&setup_menu_rs_jas);
+      setup_menu_rs_jas.args1 = (255 - jas_disp) / 15;
+      key = 0;
+    }
+  }
+  }
+  /// konec hlavniho setup menu
+  /////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  /// nastaveni jasu
+  if (strcmp_P(curr_menu, title_item_menu_setup_jas) == 0)
+  {
+  if (strcmp_P(curr_item, title_item_setup_jas) == 0)
+  {
+    uint8_t tmp8_1 = setup_menu_rs_jas.args1;
+    if (key == TL_MAX)
+    {
+      if (tmp8_1 < 17)tmp8_1++;
+    }
+    if (key == TL_OFF)
+    {
+      if (tmp8_1 > 1)tmp8_1--;
+    }
+    setup_menu_rs_jas.args1 = tmp8_1;
+    jas_disp = 255 - (15 * tmp8_1);
+    if (tmp8_1 == 17)
+    {
+      /// auto jas
+      led_display_text_string("A");
+    }
+    else
+    {
+      /// manualni jas
+      led_display_text_2(tmp8_1);
+      analogWrite(PWM_DISP, jas_disp);
+    }
+    if (key == TL_OK)
+    {
+      EEPROM.write(my_jas_disp, jas_disp);
+      menu_back_root_menu();
+    }
+  }
+  }
+
+
+*/
+
+
+/*
+
+   ///globalni back
+  if (strcmp_P(curr_item, title_item_menu_back) == 0)
+  {
+   if (key == TL_OK)
+   {
+     menu_back_root_menu();
+     key = 0;
+   }
   }
 */
