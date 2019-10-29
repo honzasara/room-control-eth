@@ -1,3 +1,7 @@
+#include <NTPClient.h>
+
+#include <ArduinoJson.h>
+
 #include "SSD1306.h"
 #include <PubSubClient.h>
 #include <UIPEthernet.h>
@@ -25,7 +29,7 @@
 #define MAX_THERMOSTAT 3
 #define MAX_TEMP 320
 #define MIN_TEMP 160
-#define AVAILABLE_PROGRAM 20
+#define AVAILABLE_PROGRAM 9
 
 #define TERM_READY 1
 #define TERM_STOP 0
@@ -43,10 +47,12 @@
 
 #define set_default_values 90
 #define my_sense 91
-#define dostupny_program0 92
-#define dostupny_program1 93
-#define dostupny_program2 94
-#define dostupny_program3 95
+/*
+  #define dostupny_program0 92
+  #define dostupny_program1 93
+  #define dostupny_program2 94
+  #define dostupny_program3 95
+*/
 #define my_jas_disp 96
 #define eeprom_term_mode 97
 #define my_jas_key 98
@@ -60,7 +66,7 @@
    uint8_t program 15
    uint8_t associate_tds 16
    uint8_t ready 17
-   uint8_t stav 18 freee
+   uint8_t mode 18
    uint8_t associate_output 19
 */
 #define eeprom_thermostat_1 120
@@ -127,12 +133,12 @@
 #define MAX_TEMP_BUFFER 32
 #define UART_RECV_MAX_SIZE 64
 
-#define MAX_ITEMS_ROOT_MENU 6
-#define MAX_HISTORY 6
+#define MAX_ITEMS_ROOT_MENU 12
+#define MAX_HISTORY 5
 
 
 
-
+StaticJsonDocument<512> doc;
 
 struct struct_ds2482
 {
@@ -145,6 +151,7 @@ struct struct_1w_rom
 {
   uint8_t rom[8];
   uint8_t assigned_ds2482;
+  uint8_t used;
 };
 
 typedef struct struct_DDS18s20
@@ -184,6 +191,7 @@ typedef struct RootMenu
   uint8_t args1;
   uint8_t args2;
   uint8_t args3;
+  uint8_t idx;
 };
 
 typedef struct Struct_RootHistory
@@ -226,8 +234,9 @@ RTC_DS1307 rtc;
 DateTime now;
 
 EthernetClient ethClient;
+EthernetUDP udpClient;
 PubSubClient mqtt_client(ethClient);
-
+NTPClient timeClient(udpClient);
 
 
 
@@ -241,7 +250,11 @@ struct_status_DDS18s20 status_tds18s20[HW_ONEWIRE_MAXROMS];
 uint8_t last_sync = 0;
 uint8_t Global_HWwirenum = 0;
 uint8_t tmp_rom[8];
-uint8_t key, key_now, key_press, key_press_cnt;
+uint8_t key = 0;
+uint8_t key_now = 0;
+uint8_t key_press = 0;
+uint8_t key_release = 0;
+uint8_t key_press_cnt[8];
 uint8_t led, led_old;
 volatile uint8_t rsid;
 uint8_t ppwm = 0;
@@ -283,39 +296,58 @@ char uart_recv[UART_RECV_MAX_SIZE];
   const char at_term_ring_prog[] PROGMEM = "term/ring/prog";
 */
 
-//const char title_error[] PROGMEM = "error";
+const char global_time_set[] PROGMEM = "global/time/set";
+const char global_time_ntp[] PROGMEM = "global/time/ntp";
+
+
+
+const char title_error[] PROGMEM = "error";
 
 const char title_root_termostat[] PROGMEM = "Term";
 const char title_item_menu_temp[] PROGMEM = "Teplota";
 const char title_item_menu_time[] PROGMEM = "Cas";
 const char title_item_menu_termstav[] PROGMEM = "TermStav";
+const char title_root_setup_menu[] PROGMEM = " SETUP";
+const char null_text[] PROGMEM = "";
 
+const char title_root_termclimate[] PROGMEM = "-MIN- ";
+const char title_root_termman[] PROGMEM = "-MAN- ";
+const char title_root_termprog[] PROGMEM = "-PROG-";
+const char title_root_termmax[] PROGMEM = "-MAX- ";
+const char title_root_termoff[] PROGMEM = "-OFF- ";
+
+
+const char title_item_menu_termset[] PROGMEM = "Termset";
+
+const char title_item_setup_jas[] PROGMEM  = "JAS $$";
+const char title_item_setup_prog[] PROGMEM  = "PROG$$";
+
+const char title_item_menu_setup_jas[] PROGMEM =  "n JAS ";
+const char title_item_menu_setup_prog[] PROGMEM =  "nPROG$";
+const char title_item_menu_back[] PROGMEM = " ZPET ";
 /*
-  const char title_root_climate[] PROGMEM = "T Min";
-  const char title_root_fastsette[] PROGMEM = "FstSt";
-  const char title_root_termprog[] PROGMEM = "T Prog";
-  const char title_root_termmax[] PROGMEM = "T Max";
-  const char title_root_termoff[] PROGMEM = "T Off";
+
   /*
 
 
-  const char title_root_setup_menu[] PROGMEM = "Setup";
 
 
 
 
-  const   char title_item_menu_termset[] PROGMEM = "Termset";
+
+
 
   const char title_item_menu_setup_bus[] PROGMEM =  "RS485";
-  const char title_item_menu_setup_jas[] PROGMEM =  "n JAS ";
-  const char title_item_menu_back[] PROGMEM = " ZPET ";
+
+
   //const char title_item_setup_rs_id[] PROGMEM  = "nRS $$";
-  const char title_item_setup_jas[] PROGMEM  = "JAS $$";
+
 */
 
 
 
-const char mqtt_header[] PROGMEM  = "/thermctl/";
+const char mqtt_header_in[] PROGMEM  = "/thermctl-in/";
+const char mqtt_header_out[] PROGMEM  = "/thermctl-out/";
 char led_display_text[8];
 
 
@@ -329,19 +361,32 @@ ItemMenu menu_show_temp;
 ItemMenu menu_show_time;
 ItemMenu menu_show_termstav;
 
+RootMenu setup_menu;
+
+RootMenu term_man;
+RootMenu term_max;
+RootMenu term_climate;
+RootMenu term_off;
+RootMenu term_prog;
+
+ItemMenu item_term_set_global;
+
+RootMenu setup_menu_jas;
+RootMenu setup_menu_prog[MAX_THERMOSTAT];
+
+
+ItemMenu item_setup_jas, item_setup_prog, item_back;
+ItemMenu item_setup_set_jas;
+ItemMenu item_setup_set_prog;
 /*
-  RootMenu term_fast_set;
-  RootMenu term_max;
-  RootMenu term_climate;
-  RootMenu term_off;
-  RootMenu term_prog;
+
 */
 /*
 
 
-  RootMenu setup_menu;
+
   RootMenu setup_menu_rs_id;
-  RootMenu setup_menu_rs_jas;
+
 
 
   RootMenu rm_error;
@@ -349,15 +394,16 @@ ItemMenu menu_show_termstav;
   ItemMenu menu_show_time,   menu_show_termstav;
   ItemMenu menu_show_temp;
 
-  ItemMenu menu_show_term_set_global;
+  ItemMenu item_term_prog;
+
   ItemMenu menu_show_term_max;
   ItemMenu menu_show_term_climate;
   ItemMenu menu_show_term_off;
-  ItemMenu menu_show_term_prog;
 
-  ItemMenu menu_setup_bus, menu_setup_jas, menu_back;
 
-  ItemMenu menu_setup_rs_id, menu_setup_set_jas;
+
+
+
 
   ItemMenu item_error;
 
@@ -512,6 +558,7 @@ endloop:;
   }
 }
 
+//saric
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 void menu_history_init(RootMenu *rm)
 {
@@ -521,9 +568,13 @@ void menu_history_init(RootMenu *rm)
 ///////////////////////////////////////
 void menu_init(RootMenu *rm)
 {
-  for (uint8_t itm = 0; itm < MAX_ITEMS_ROOT_MENU; itm++) rm->Item[itm] = nullptr;
+  for (uint8_t itm = 0; itm < MAX_ITEMS_ROOT_MENU; itm++)
+  {
+    rm->Item[itm] = nullptr;
+  }
   rm->items = 0;
   rm->current_item = 0;
+  rm->idx = 255;
 }
 ////////////////////////////////////
 void menu_set_root_menu(RootMenu *rm)
@@ -543,6 +594,11 @@ void menu_back_root_menu(void)
 void menu_root_setname(RootMenu *rm, char *name)
 {
   rm->name = name;
+}
+
+void menu_root_setidx(RootMenu *rm, uint8_t idx)
+{
+  rm->idx = idx;
 }
 ///////////////////////////////////////
 bool menu_root_additem(RootMenu *rm, ItemMenu *item)
@@ -590,27 +646,44 @@ void menu_display(void)
   uint8_t t, te;
   _rm = *RootHistory.history[RootHistory.menu_max];
 
-  if (_rm.Item[_rm.current_item]->on_show != nullptr)
+  if (_rm.items > 0)
   {
-    _rm.Item[_rm.current_item]->on_show();
-  }
-
-  if (_rm.Item[_rm.current_item]->on_show == nullptr)
-  {
-    t = 0;
-    strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
-
-    for (uint8_t i = 0; i < strlen(tmp); i++)
+    if (_rm.Item[_rm.current_item]->on_show != nullptr)
     {
-      if (tmp[i] == '$')
-      {
-        tmp[i] = led_display_text[t];
-        t++;
-      }
+      _rm.Item[_rm.current_item]->on_show();
     }
-    /// praso hack s teckou; nefunguje idealne
-    if (t == 0) tecka = 0;
+
+    if (_rm.Item[_rm.current_item]->on_show == nullptr)
+    {
+      t = 0;
+      strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
+      if (_rm.idx != 255)
+        itoa(_rm.idx, led_display_text, 10);
+
+      for (uint8_t i = 0; i < strlen(tmp); i++)
+      {
+        if (tmp[i] == '$')
+        {
+          tmp[i] = led_display_text[t];
+          t++;
+        }
+      }
+      /// praso hack s teckou; nefunguje idealne
+      if (t == 0) tecka = 0;
+      show_default(tmp);
+    }
+  }
+  else
+  {
+    strcpy_P(tmp, _rm.name);
     show_default(tmp);
+    /*
+      GLCD_Clear();
+      GLCD_GotoXY(0, 0);
+      GLCD_PrintString(tmp);
+      GLCD_flip();
+      GLCD_Render();
+    */
   }
 }
 
@@ -620,11 +693,18 @@ void get_current_menu(char *text)
   strcpy_P(text, RootHistory.history[RootHistory.menu_max]->name);
 }
 
+uint8_t get_current_menu_idx()
+{
+  return RootHistory.history[RootHistory.menu_max]->idx;
+}
+
 void get_current_item(char *tmp)
 {
+  strcpy(tmp, "");
   RootMenu _rm;
   _rm = *RootHistory.history[RootHistory.menu_max];
-  strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
+  /// ochrana pokud k menu pridana polozka, vracim prazdny napis polozky
+  if (_rm.items > 0 ) strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
 }
 
 
@@ -683,17 +763,52 @@ void menu_rotate(void)
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
+//// ziska nazev tds cidla
 void tds_get_name(uint8_t idx, char *name)
 {
-
+  struct_DDS18s20 tds;
+  get_tds18s20(idx, &tds);
+  strcpy(name, tds.name);
 }
-
+//// nastavi nazev k tds cidlu
 void tds_set_name(uint8_t idx, char *name)
 {
-
+  struct_DDS18s20 tds;
+  get_tds18s20(idx, &tds);
+  strcpy(tds.name, name);
+  set_tds18s20(idx, &tds);
 }
-
+//// funkce nastavi offset cidlu tds
+void tds_set_offset(uint8_t idx, int offset)
+{
+  struct_DDS18s20 tds;
+  get_tds18s20(idx, &tds);
+  tds.offset = offset;
+  set_tds18s20(idx, &tds);
+}
+//// funkce ziska offset cidlu tds
+int tds_get_offset(uint8_t idx, int offset)
+{
+  struct_DDS18s20 tds;
+  get_tds18s20(idx, &tds);
+  return tds.offset;
+}
+//// funkce vymaze associovane 1wire -> tds
+void tds_set_clear(uint8_t idx)
+{
+  struct_DDS18s20 tds;
+  get_tds18s20(idx, &tds);
+  if (tds.used == 1)
+  {
+    tds.used = 0;
+    strcpy(tds.name, "FREE");
+    tds.offset = 0;
+    for (uint8_t i = 0; i < 8; i++)
+      tds.rom[i] = 0;
+    tds.assigned_ds2482 = 0;
+    set_tds18s20(idx, &tds);
+  }
+}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////
 //// nacte nazev zarizeni
@@ -704,7 +819,11 @@ void device_get_name(char *name)
   {
     t = EEPROM.read(device_nazev  + i);
     name[i] = t;
-    if (t == 0) break;
+    name[i + 1] = 0;
+    if (t == 0)
+    {
+      break;
+    }
   }
 }
 //// ulozi nazev zarizeni
@@ -715,10 +834,15 @@ void device_set_name(char *name)
   {
     t = name[i];
     EEPROM.write(device_nazev +  i, t);
-    if (t == 0) break;
+    if (t == 0)
+    {
+      EEPROM.write(device_nazev +  i + 1, 0);
+      break;
+    }
   }
 }
 ///////////////////////////////////////////
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void load_setup_network(void)
@@ -763,7 +887,6 @@ void thermostat_get_name(uint8_t idx, char *name)
     if (t == 0) break;
   }
 }
-
 void thermostat_set_name(uint8_t idx, char *name)
 {
   char t;
@@ -782,9 +905,9 @@ uint8_t thermostat_get_output(uint8_t idx)
   return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 19);
 }
 //////////////////////
-void thermostat_set_output(uint8_t idx, uint8_t ready)
+void thermostat_set_output(uint8_t idx, uint8_t output)
 {
-  EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 19, ready);
+  EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 19, output);
 }
 //////////////////////////////////////////////////////////////////////////////////////
 
@@ -806,18 +929,19 @@ void thermostat_set_ready(uint8_t idx, uint8_t ready)
 /// funkce ktera nastavuje/zjistuje jestli dany operacni termostat je pripraven
 //////////////
 
-uint8_t thermostat_get_stav(uint8_t idx)
+uint8_t thermostat_get_status(uint8_t idx)
 {
   return therm_stav[idx];
 }
 //////////////////////
-void thermostat_set_stav(uint8_t idx, uint8_t stav)
+void thermostat_set_status(uint8_t idx, uint8_t stav)
 {
   therm_stav[idx] = stav;
 }
 
 
 ////////////////////////////////////////////////////////////////////////////////////////
+///////// globalni termostat mode
 uint8_t thermostat_get_mode(void)
 {
   term_mode = EEPROM.read(eeprom_term_mode);
@@ -829,68 +953,480 @@ void thermostat_set_mode(uint8_t in)
   term_mode = in;
   EEPROM.write(eeprom_term_mode, term_mode);
 }
-
-void thermostat_get_availability_program(void)
-{
+/*
+  //////// seznam vsech dostupnych programu
+  void thermostat_get_availability_program(void)
+  {
   max_program = EEPROM.read(dostupny_program0) | EEPROM.read(dostupny_program1) << 8 | EEPROM.read(dostupny_program2) << 16 | EEPROM.read(dostupny_program3) << 24;
-}
-
-void thermostat_set_availability_program(void)
-{
+  }
+  void thermostat_set_availability_program(void)
+  {
   EEPROM.write(dostupny_program0, max_program & 0xff);
   EEPROM.write(dostupny_program1, (max_program >> 8) & 0xff);
   EEPROM.write(dostupny_program2, (max_program >> 16) & 0xff);
   EEPROM.write(dostupny_program3, (max_program >> 24) & 0xff);
-}
-
+  }
+*/
+//// nastaveni programu k ringu termostatu
 uint8_t thermostat_get_program_id(uint8_t idx)
 {
   return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 15);
 }
-
 void thermostat_set_program_id(uint8_t idx, uint8_t id)
 {
   return EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 15, id);
 }
 
+///mezni rozhodovaci teplota
 int thermostat_get_mezni(uint8_t idx)
 {
   return (EEPROM.read(eeprom_thermostat_0 + (20 * idx) + 10) << 8) + EEPROM.read(eeprom_thermostat_0 + (20 * idx) + 11);
 }
-
 void thermostat_set_mezni(uint8_t idx, int temp)
 {
   EEPROM.write(eeprom_thermostat_0 + (20 * idx) + 10, temp >> 8);
   EEPROM.write(eeprom_thermostat_0 + (20 * idx) + 11, temp & 0xff);
 }
 
+///////////////
 uint8_t thermostat_get_asociate_tds(uint8_t idx)
 {
   return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 16);
 }
-
 void thermostat_set_asociate_tds(uint8_t idx, uint8_t id)
 {
   EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 16, id);
 }
+
+//// nastaveni modu k ringu termostatu
+uint8_t thermostat_get_ring_mode(uint8_t idx)
+{
+  return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 18);
+}
+void thermostat_set_ring_mode(uint8_t idx, uint8_t id)
+{
+  EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 18, id);
+}
+
+///////////////////////////////////////////////////////////////
+void send_mqtt_message_prefix_id_topic_payload(char *prefix, uint8_t id, char *topic, char *payload)
+{
+  char str_topic[64];
+  char hostname[10];
+  char tmp1[12];
+  device_get_name(hostname);
+  strcpy_P(str_topic, mqtt_header_out);
+  strcat(str_topic, hostname);
+  strcat(str_topic, "/");
+  strcat(str_topic, prefix);
+  strcat(str_topic, "/");
+  itoa(id, tmp1, 10);
+  strcat(str_topic, tmp1);
+  strcat(str_topic, "/");
+  strcat(str_topic, topic);
+  mqtt_client.publish(str_topic, payload);
+}
+/////////////////////////////////////////////
+//// /thermctl_out/XXXXX/1wire/count
+//// /thermctl_out/XXXXX/1wire/IDcko/rom
+void send_mqtt_onewire(void)
+{
+  char str_topic[64];
+  char hostname[10];
+  char payload[64];
+  char tmp1[4];
+  device_get_name(hostname);
+  itoa(Global_HWwirenum, payload, 10);
+  strcpy_P(str_topic, mqtt_header_out);
+  strcat(str_topic, hostname);
+  strcat(str_topic, "/1wire/count");
+  mqtt_client.publish(str_topic, payload);
+  for (uint8_t i = 0; i < Global_HWwirenum; i++)
+  {
+    strcpy_P(str_topic, mqtt_header_out);
+    strcat(str_topic, hostname);
+    strcat(str_topic, "/1wire/");
+    itoa(i, tmp1, 10);
+    strcat(str_topic, tmp1);
+    strcat(str_topic, "/rom");
+
+    payload[0] = 0;
+    for (uint8_t a = 0; a < 8; a++ )
+    {
+      itoa(w_rom[i].rom[a], tmp1, 16);
+      strcat(payload, tmp1);
+      if (a < 7)
+      {
+        tmp1[0] = ':';
+        tmp1[1] = 0;
+        strcat(payload, tmp1);
+      }
+    }
+    mqtt_client.publish(str_topic, payload);
+  }
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+//// /thermctl-out/XXXXX/tds/ID/temp
+//// /thermctl-out/XXXXX/tds/ID/name
+//// /thermctl-out/XXXXX/tds/offset
+//// /thermctl-out/XXXXX/tds/online
+void send_mqtt_tds(void)
+{
+  struct_DDS18s20 tds;
+  //char str_topic[64];
+  //char hostname[10];
+  char payload[64];
+  //char tmp1[5];
+  int tt;
+  //device_get_name(hostname);
+  for (uint8_t id = 0; id < HW_ONEWIRE_MAXROMS; id++)
+    if (get_tds18s20(id, &tds) == 1)
+      if (tds.used == 1) if (status_tds18s20[id].online == True)
+        {
+          tt = status_tds18s20[id].temp / 10;
+          itoa(tt, payload, 10);
+          send_mqtt_message_prefix_id_topic_payload("tds", id, "temp", payload);
+          /*
+            strcpy_P(str_topic, mqtt_header_out);
+            strcat(str_topic, hostname);
+            strcat(str_topic, "/tds/");
+            itoa(id, tmp1, 10);
+            strcat(str_topic, tmp1);
+            strcat(str_topic, "/temp");
+            mqtt_client.publish(str_topic, payload);
+          */
+          strcpy(payload, tds.name);
+          send_mqtt_message_prefix_id_topic_payload("tds", id, "name", payload);
+          /*
+            strcpy_P(str_topic, mqtt_header_out);
+            strcat(str_topic, hostname);
+            strcat(str_topic, "/tds/");
+            itoa(id, tmp1, 10);
+            strcat(str_topic, tmp1);
+            strcat(str_topic, "/name");
+            mqtt_client.publish(str_topic, payload);
+          */
+          tt = tds.offset;
+          itoa(tt, payload, 10);
+          send_mqtt_message_prefix_id_topic_payload("tds", id, "offset", payload);
+          /*
+            strcpy_P(str_topic, mqtt_header_out);
+            strcat(str_topic, hostname);
+            strcat(str_topic, "/tds/");
+            itoa(id, tmp1, 10);
+            strcat(str_topic, tmp1);
+            strcat(str_topic, "/offset");
+            mqtt_client.publish(str_topic, payload);
+          */
+          tt = status_tds18s20[id].online;
+          itoa(tt, payload, 10);
+          send_mqtt_message_prefix_id_topic_payload("tds", id, "online", payload);
+          /*
+            strcpy_P(str_topic, mqtt_header_out);
+            strcat(str_topic, hostname);
+            strcat(str_topic, "/tds/");
+            itoa(id, tmp1, 10);
+            strcat(str_topic, tmp1);
+            strcat(str_topic, "/online");
+            mqtt_client.publish(str_topic, payload);
+          */
+        }
+}
+//////////////////////////////////////////////////
+
+
+//// /thermctl-out/XXXXX/ring/ID/name
+//// /thermctl-out/XXXXX/ring/ID/ready
+//// /thermctl-out/XXXXX/ring/ID/program
+//// /thermctl-out/XXXXX/ring/ID/threshold
+//// /thermctl-out/XXXXX/ring/ID/mode
+//// /thermctl-out/XXXXX/ring/ID/status
+//// /thermctl-out/XXXXX/ring/ID/tds
+//// /thermctl-out/XXXXX/ring/ID/output
+void send_mqtt_ring(void)
+{
+  //char str_topic[64];
+  //char hostname[10];
+  char payload[64];
+  //char tmp1[12];
+  //device_get_name(hostname);
+  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+    if (thermostat_get_ring_mode(idx) != 255)
+    {
+      thermostat_get_name(idx, payload);
+      send_mqtt_message_prefix_id_topic_payload("ring", idx, "name", payload);
+      /*
+        strcpy(payload, tmp1);
+        strcpy_P(str_topic, mqtt_header_out);
+        strcat(str_topic, hostname);
+        strcat(str_topic, "/ring/");
+        itoa(idx, tmp1, 10);
+        strcat(str_topic, tmp1);
+        strcat(str_topic, "/name");
+        mqtt_client.publish(str_topic, payload);
+      */
+      /*
+        strcpy_P(str_topic, mqtt_header_out);
+        strcat(str_topic, hostname);
+        strcat(str_topic, "/ring/");
+        itoa(idx, tmp1, 10);
+        strcat(str_topic, tmp1);
+        strcat(str_topic, "/ready");
+      */
+      itoa(thermostat_get_ready(idx), payload, 10);
+      send_mqtt_message_prefix_id_topic_payload("ring", idx, "ready", payload);
+      //mqtt_client.publish(str_topic, payload);
+
+      /*
+        strcpy_P(str_topic, mqtt_header_out);
+        strcat(str_topic, hostname);
+        strcat(str_topic, "/ring/");
+        itoa(idx, tmp1, 10);
+        strcat(str_topic, tmp1);
+        strcat(str_topic, "/program");
+      */
+      itoa(thermostat_get_program_id(idx), payload, 10);
+      send_mqtt_message_prefix_id_topic_payload("ring", idx, "ready", payload);
+      //mqtt_client.publish(str_topic, payload);
+
+      /*
+        strcpy_P(str_topic, mqtt_header_out);
+        strcat(str_topic, hostname);
+        strcat(str_topic, "/ring/");
+        itoa(idx, tmp1, 10);
+        strcat(str_topic, tmp1);
+        strcat(str_topic, "/threshold");
+      */
+      itoa(thermostat_get_mezni(idx), payload, 10);
+      send_mqtt_message_prefix_id_topic_payload("ring", idx, "threshold", payload);
+      //mqtt_client.publish(str_topic, payload);
+
+      /*
+        strcpy_P(str_topic, mqtt_header_out);
+        strcat(str_topic, hostname);
+        strcat(str_topic, "/ring/");
+        itoa(idx, tmp1, 10);
+        strcat(str_topic, tmp1);
+        strcat(str_topic, "/mode");
+      */
+      itoa(thermostat_get_ring_mode(idx), payload, 10);
+      send_mqtt_message_prefix_id_topic_payload("ring", idx, "mode", payload);
+      //mqtt_client.publish(str_topic, payload);
+      /*
+        strcpy_P(str_topic, mqtt_header_out);
+        strcat(str_topic, hostname);
+        strcat(str_topic, "/ring/");
+        itoa(idx, tmp1, 10);
+        strcat(str_topic, tmp1);
+        strcat(str_topic, "/status");
+      */
+      itoa(thermostat_get_status(idx), payload, 10);
+      send_mqtt_message_prefix_id_topic_payload("ring", idx, "status", payload);
+      //mqtt_client.publish(str_topic, payload);
+      /*
+        strcpy_P(str_topic, mqtt_header_out);
+        strcat(str_topic, hostname);
+        strcat(str_topic, "/ring/");
+        itoa(idx, tmp1, 10);
+        strcat(str_topic, tmp1);
+        strcat(str_topic, "/tds");
+      */
+      itoa(thermostat_get_asociate_tds(idx), payload, 10);
+      send_mqtt_message_prefix_id_topic_payload("ring", idx, "tds", payload);
+      //mqtt_client.publish(str_topic, payload);
+      /*
+        strcpy_P(str_topic, mqtt_header_out);
+        strcat(str_topic, hostname);
+        strcat(str_topic, "/ring/");
+        itoa(idx, tmp1, 10);
+        strcat(str_topic, tmp1);
+        strcat(str_topic, "/output");
+      */
+      itoa(thermostat_get_output(idx), payload, 10);
+      send_mqtt_message_prefix_id_topic_payload("ring", idx, "output", payload);
+      //mqtt_client.publish(str_topic, payload);
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void mqtt_callback(char* topic, byte* payload, unsigned int length)
 {
+  char str1[64];
+  char str2[128];
+  char tmp1[4];
+  uint8_t cnt = 0;
+  uint8_t id = 0;
+  struct_DDS18s20 tds;
+  char *pch;
+  for (uint8_t j = 0; j < 128; j++) str2[j] = 0;
+  GLCD_Clear();
+  GLCD_GotoXY(0, 0);
+
+
+
+  //// /thermctl-in/global/time/set - nastaveni casu. payload json
+  strcpy_P(str1, mqtt_header_in);
+  strcat_P(str1, global_time_set);
+  if (strcmp(str1, topic) == 0)
+  {
+    strncpy(str2, payload, length);
+    deserializeJson(doc, str2);
+    JsonObject root = doc.as<JsonObject>();
+    if (root.containsKey("year") && root.containsKey("month") && root.containsKey("month") && root.containsKey("hour") && root.containsKey("minute") && root.containsKey("second"))
+      rtc.adjust(DateTime(root["year"], root["month"], root["day"], root["hour"], root["minute"], root["second"]));
+  }
+  //// /thermctl-in/global/time/ntp - jednorazova aktualizace casu z ntp serveru
+  strcpy_P(str1, mqtt_header_in);
+  strcat_P(str1, global_time_ntp);
+  if (strcmp(str1, topic) == 0)
+  {
+    // rtc.adjust(DateTime(root["year"], root["month"], root["day"], root["hour"], root["minute"], root["second"]));
+  }
+
+  //// /thermctl/XXXX/tds/list - vycte seznam vsech tds cidel
+  //// /thermctl/global/ping - test spojeni
+
+  //// /thermctl/XXXX/1wire/list - vycte seznam vsech nalezenych 1wire zarizeni
+
+  //// /thermctl-in/XXXX/tds/associate - asociace do tds si pridam mac 1wire - odpoved je pod jakem ID to mam ulozeno
+  strcpy_P(str1, mqtt_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/tds/associate");
+  if (strcmp(str1, topic) == 0)
+  {
+    strncpy(str2, payload, length);
+    if (atoi(str2) < Global_HWwirenum)
+      for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXDEVICES; idx++)
+      {
+        get_tds18s20(idx, &tds);
+        if (tds.used == 0 && w_rom[atoi(str2)].used == 1)
+        {
+          tds.used = 1;
+          for (uint8_t i = 0; i < 8; i++)
+            tds.rom[i] = w_rom[atoi(str2)].rom[i];
+          tds.assigned_ds2482 = ds2482_address[w_rom[idx].assigned_ds2482].i2c_addr;
+          set_tds18s20(idx, &tds);
+          break;
+        }
+      }
+  }
+
+  //// /thermctl-in/XXXX/tds/set/IDcko/name - nastavi cidlu nazev
+  //// /thermctl-in/XXXX/tds/set/IDcko/offset
+  //// /thermctl-in/XXXX/tds/set/IDcko/clear
+  strcpy_P(str1, mqtt_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/tds/set/");
+  if (strncmp(str1, topic, strlen(str1)) == 0)
+  {
+    strncpy(str2, payload, length);
+    cnt = 0;
+    for (uint8_t f = strlen(str1); f < strlen(topic); f++)
+    {
+      str1[cnt] = topic[f];
+      str1[cnt + 1] = 0;
+      cnt++;
+    }
+    cnt = 0;
+    pch = strtok (str1, "/");
+    while (pch != NULL)
+    {
+      if (cnt == 0) id = atoi(pch);
+      if ((cnt == 1) && (strcmp(pch, "name") == 0)) tds_set_name(id, str2);
+      if ((cnt == 1) && (strcmp(pch, "offset") == 0)) tds_set_offset(id, atoi(str2));
+      if ((cnt == 1) && (strcmp(pch, "clear") == 0)) tds_set_clear(id);
+      pch = strtok (NULL, "/");
+      cnt++;
+    }
+  }
+
+
+
+  //// thermctl-in/XXXXX/ring/set/IDcko/name
+  //// thermctl-in/XXXXX/ring/set/IDcko/program
+  //// thermctl-in/XXXXX/ring/set/IDcko/threshold
+  //// thermctl-in/XXXXX/ring/set/IDcko/mode
+  //// thermctl-in/XXXXX/ring/set/IDcko/tds
+  //// thermctl-in/XXXXX/ring/set/IDcko/ready
+  //// thermctl-in/XXXXX/ring/set/IDcko/output
+  strcpy_P(str1, mqtt_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/ring/set/");
+  if (strncmp(str1, topic, strlen(str1)) == 0)
+  {
+    strncpy(str2, payload, length);
+    cnt = 0;
+    for (uint8_t f = strlen(str1); f < strlen(topic); f++)
+    {
+      str1[cnt] = topic[f];
+      str1[cnt + 1] = 0;
+      cnt++;
+    }
+    cnt = 0;
+    pch = strtok (str1, "/");
+    while (pch != NULL)
+    {
+      if (cnt == 0) id = atoi(pch);
+      if ((cnt == 1) && (strcmp(pch, "name") == 0)) thermostat_set_name(id, str2);
+      if ((cnt == 1) && (strcmp(pch, "program") == 0)) thermostat_set_program_id(id, atoi(str2));
+      if ((cnt == 1) && (strcmp(pch, "threshold") == 0)) thermostat_set_mezni(id, atoi(str2));
+      if ((cnt == 1) && (strcmp(pch, "mode") == 0)) thermostat_set_ring_mode(id, atoi(str2));
+      if ((cnt == 1) && (strcmp(pch, "tds") == 0)) thermostat_set_asociate_tds(id, atoi(str2));
+      if ((cnt == 1) && (strcmp(pch, "ready") == 0)) thermostat_set_ready(id, atoi(str2));
+      if ((cnt == 1) && (strcmp(pch, "output") == 0)) thermostat_set_output(id, atoi(str2));
+      pch = strtok (NULL, "/");
+      cnt++;
+    }
+  }
+
+
+  //// /thermctl-in/XXXXX/reset_default
+  strcpy_P(str1, mqtt_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/reset_default");
+  if (strcmp(str1, topic) == 0)
+  {
+    EEPROM.write(set_default_values, 255);
+  }
+
+
+  GLCD_flip();
+  GLCD_Render();
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////
+void send_mqtt_status(void)
+{
+  char str_topic[64];
+  char hostname[10];
+  char payload[64];
+  strcpy_P(str_topic, mqtt_header_out);
+  strcat(str_topic, device.nazev);
+  strcat(str_topic, "/status/uptime");
+  itoa(uptime, payload, 10);
+  mqtt_client.publish(str_topic, payload);
+
+
+  strcpy_P(str_topic, mqtt_header_out);
+  strcat(str_topic, device.nazev);
+  strcat(str_topic, "/status/brigthness");
+  itoa(aktual_light, payload, 10);
+  mqtt_client.publish(str_topic, payload);
+}
+///////////////////////////
 void mqtt_reconnect(void)
 {
   char nazev[10];
-  char topic[20]; ///  /thermctl/xxxxxxxx/#
-  ///  /thermctl/all/#
-  device_get_name(*nazev);
+  char topic[26]; ///  /thermctl/xxxxxxxx/#
+  ///  /thermctl/global/#
+  device_get_name(nazev);
   mqtt_client.connect(nazev);
-  strcpy_P(topic, mqtt_header);
+  strcpy_P(topic, mqtt_header_in);
   strcat(topic, nazev);
   strcat(topic, "/#");
   mqtt_client.subscribe(topic);
-  strcpy_P(topic, mqtt_header);
-  strcat(topic, "all/#");
+  strcpy_P(topic, mqtt_header_in);
+  strcat(topic, "global/#");
   mqtt_client.subscribe(topic);
 }
 ////////////////////////////////////////////////////////
@@ -903,11 +1439,6 @@ void glcd_init_header(void)
   GLCD_PrintString("Pokojovy termostat");
   GLCD_GotoXY(0, 16);
   GLCD_PrintString("inicializace");
-}
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void ethloop(void)
-{
-  mqtt_client.loop();
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -959,55 +1490,82 @@ void setup(void) {
   menu_root_additem(&rm, &menu_show_temp);
   menu_root_additem(&rm, &menu_show_termstav);
 
+  menu_init(&setup_menu);
+  menu_root_setname(&setup_menu, title_root_setup_menu);
+
+  menu_init(&term_man);
+  menu_init(&term_max);
+  menu_init(&term_off);
+  menu_init(&term_prog);
+  menu_init(&term_climate);
+
+  menu_root_setname(&term_man, title_root_termman);
+  menu_root_setname(&term_prog, title_root_termprog);
+  menu_root_setname(&term_max, title_root_termmax);
+  menu_root_setname(&term_climate, title_root_termclimate);
+  menu_root_setname(&term_off, title_root_termoff);
 
 
+  menu_item_set_properties(&item_term_set_global, title_item_menu_termset, show_term_set_global);
+  menu_root_additem(&term_man, &item_term_set_global);
+
+  menu_init(&setup_menu_jas);
+  menu_root_setname(&setup_menu_jas, title_item_menu_setup_jas);
+
+  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+  {
+    menu_init(&setup_menu_prog[idx]);
+    menu_root_setname(&setup_menu_prog[idx], title_item_menu_setup_prog);
+    menu_root_setidx(&setup_menu_prog[idx], idx);
+  }
+  //menu_init(&rm_error);
+  menu_item_set_properties(&item_setup_jas, title_item_menu_setup_jas , nullptr);
+  menu_item_set_properties(&item_setup_prog, title_item_menu_setup_prog , nullptr);
+  menu_item_set_properties(&item_back, title_item_menu_back, back);
+
+  menu_root_additem(&setup_menu, &item_setup_jas);
+
+  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++) menu_root_additem(&setup_menu, &item_setup_prog);
+  menu_root_additem(&setup_menu, &item_back);
+
+  menu_item_set_properties(&item_setup_set_jas, title_item_setup_jas, nullptr);
+  menu_root_additem(&setup_menu_jas, &item_setup_set_jas);
+
+  menu_item_set_properties(&item_setup_set_prog, title_item_setup_prog, nullptr);
+  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++) menu_root_additem(&setup_menu_prog[idx], &item_setup_set_prog);
   /*
-    menu_init(&term_fast_set);
-    menu_init(&term_max);
-    menu_init(&term_off);
-    menu_init(&term_prog);
-    menu_init(&term_climate);
-
-
-    menu_root_setname(&term_fast_set, title_root_fastsette);
-    menu_root_setname(&term_prog, title_root_termprog);
-    menu_root_setname(&term_max, title_root_termmax);
-    menu_root_setname(&term_climate, title_root_climate);
-    menu_root_setname(&term_off, title_root_termoff);
   */
   /*
 
 
-    menu_init(&setup_menu);
+
 
     menu_init(&setup_menu_rs_id);
-    menu_init(&setup_menu_rs_jas);
 
-    menu_init(&rm_error);
 
     ;
-    menu_root_setname(&setup_menu, title_root_setup_menu);
+
     menu_root_setname(&setup_menu_rs_id, title_item_menu_setup_bus);
-    menu_root_setname(&setup_menu_rs_jas, title_item_menu_setup_jas);
+
 
     menu_root_setname(&rm_error, title_error);
 
+    menu_item_set_properties(&item_term_prog, title_root_termprog, show_term_prog);
 
-    menu_item_set_properties(&menu_show_term_set_global, title_item_menu_termset, show_term_set_global);
     menu_item_set_properties(&menu_show_termstav, title_item_menu_termstav, show_termstav);
 
     menu_item_set_properties(&menu_show_term_max, title_root_termmax, show_term_max);
     menu_item_set_properties(&menu_show_term_climate, title_root_climate, show_term_climate);
     menu_item_set_properties(&menu_show_term_off, title_root_termoff, show_term_off);
-    menu_item_set_properties(&menu_show_term_prog, title_root_termprog, show_term_prog);
 
-    menu_item_set_properties(&menu_setup_jas, title_item_menu_setup_jas , nullptr);
+
+
     menu_item_set_properties(&menu_setup_bus, title_item_menu_setup_bus, nullptr);
-    menu_item_set_properties(&menu_back, title_item_menu_back, back);
+
 
 
     //menu_item_set_properties(&menu_setup_rs_id, title_item_setup_rs_id, nullptr);
-    menu_item_set_properties(&menu_setup_set_jas, title_item_setup_jas, nullptr);
+
 
 
 
@@ -1017,18 +1575,18 @@ void setup(void) {
     menu_root_additem(&term_fast_set, &menu_show_term_set_global);
 
 
-    menu_root_additem(&term_prog, &menu_show_term_prog);
+
     menu_root_additem(&term_max, &menu_show_term_max);
     menu_root_additem(&term_off, &menu_show_term_off);
     menu_root_additem(&term_climate, &menu_show_term_climate);
 
-    menu_root_additem(&setup_menu, &menu_setup_jas);
+
     menu_root_additem(&setup_menu, &menu_setup_bus);
-    menu_root_additem(&setup_menu, &menu_back);
+
 
 
     menu_root_additem(&setup_menu_rs_id, &menu_setup_rs_id);
-    menu_root_additem(&setup_menu_rs_jas, &menu_setup_set_jas);
+
 
     menu_root_additem(&rm_error, &item_error);
   */
@@ -1094,7 +1652,7 @@ void setup(void) {
   delay(100);
 
 
-  for (uint8_t inic = 0; inic < 11; inic++)
+  for (uint8_t inic = 0; inic < 12; inic++)
   {
     if (inic == 0)
     {
@@ -1103,14 +1661,13 @@ void setup(void) {
         glcd_init_header();
         GLCD_GotoXY(0, 30);
         GLCD_PrintString("... reset hodnot");
-        GLCD_flip();
-        GLCD_Render();
+
         EEPROM.write(set_default_values, 0);
         EEPROM.write(my_jas_disp, 240);
         EEPROM.write(my_jas_key, 240);
         EEPROM.write(my_rs_id, 31);
         max_program = 0;
-        thermostat_set_availability_program();
+        //thermostat_set_availability_program();
         thermostat_set_mode(0);
         EEPROM.write(my_sense, 127);
         for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
@@ -1118,9 +1675,11 @@ void setup(void) {
           thermostat_set_asociate_tds(idx, 255);
           thermostat_set_mezni(idx, 220);
           thermostat_set_program_id(idx, 0);
-          thermostat_set_stav(idx, 0);
+          thermostat_set_status(idx, 0);
           thermostat_set_ready(idx, 0);
           thermostat_set_output(idx, 255);
+          thermostat_set_asociate_tds(idx, 255);
+          thermostat_set_ring_mode(idx, 255);
           thermostat_set_name(idx, "FREE");
         }
         for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXDEVICES; idx++)
@@ -1132,7 +1691,6 @@ void setup(void) {
           tds.assigned_ds2482 = 0;
           set_tds18s20(idx, &tds);
         }
-        device_set_name("TERM E1");
         rtc.adjust(DateTime(2018, 12, 14, 17, 14, 0));
         device.mac[0] = 2; device.mac[1] = 1; device.mac[2] = 2; device.mac[3] = 3; device.mac[4] = 4; device.mac[5] = 5;
         device.myIP[0] = 192; device.myIP[1] = 168; device.myIP[2] = 2; device.myIP[3] = 111;
@@ -1144,6 +1702,17 @@ void setup(void) {
         strcpy(device.mqtt_user, "saric");
         strcpy(device.mqtt_key, "no");
         save_setup_network();
+        device_set_name("TERM E1");
+        char hostname[10];
+        device_get_name(hostname);
+        GLCD_GotoXY(0, 45);
+        GLCD_PrintString("host:");
+        GLCD_GotoXY(30, 45);
+        GLCD_PrintString(hostname);
+
+        GLCD_flip();
+        GLCD_Render();
+        delay(2000);
       }
     }
 
@@ -1169,7 +1738,7 @@ void setup(void) {
       rsid = EEPROM.read(my_rs_id);
       analogWrite(PWM_DISP, jas_disp);
       analogWrite(PWM_KEY, jas_key);
-      thermostat_get_availability_program();
+      //thermostat_get_availability_program();
       thermostat_get_mode();
     }
 
@@ -1218,20 +1787,17 @@ void setup(void) {
       GLCD_Render();
       init_mpc();
       write_to_mcp(255);
-      for (uint8_t k = 0; k < 2; k++)
+      for (uint8_t i = 0; i < 8; i++)
       {
-        for (uint8_t i = 0; i < 8; i++)
-        {
-          write_to_mcp(~(1 << i));
-          tecka = (1 << i);
-          delay(100);
-        }
-        for (uint8_t i = 0; i < 8; i++)
-        {
-          write_to_mcp(~(1 << (7 - i)));
-          tecka = (1 << (7 - i));
-          delay(100);
-        }
+        write_to_mcp(~(1 << i));
+        tecka = (1 << i);
+        delay(50);
+      }
+      for (uint8_t i = 0; i < 8; i++)
+      {
+        write_to_mcp(~(1 << (7 - i)));
+        tecka = (1 << (7 - i));
+        delay(50);
       }
       tecka = 0;
       write_to_mcp(255);
@@ -1307,15 +1873,26 @@ void setup(void) {
     {
       glcd_init_header();
       GLCD_GotoXY(0, 30);
+      GLCD_PrintString("... ntp time");
+      GLCD_flip();
+      GLCD_Render();
+      timeClient.begin();
+      timeClient.setPoolServerName("192.168.2.1");
+      timeClient.update();
+    }
+
+
+    if (inic == 11)
+    {
+      glcd_init_header();
+      GLCD_GotoXY(0, 30);
       GLCD_PrintString("... hotovo ...");
       GLCD_flip();
       GLCD_Render();
     }
 
-    delay(1000);
+    delay(50);
   }
-
-  //attachInterrupt(digitalPinToInterrupt(ETH_INT), ethloop, FALLING);
 }
 ///konec setup
 
@@ -1417,6 +1994,7 @@ uint8_t one_hw_search_device(uint8_t idx)
       if (ds2482_address[idx].HWwirenum > HW_ONEWIRE_MAXDEVICES - 1) break;
       for (uint8_t a = 0; a < 8; a++)  w_rom[Global_HWwirenum].rom[a] = tmp_rom[a];
       w_rom[Global_HWwirenum].assigned_ds2482 = idx;
+      w_rom[Global_HWwirenum].used = 1;
       r = owMatchNext(ds2482_address[idx].i2c_addr, tmp_rom);
       /// celkovy pocet detekovanych roms
       ds2482_address[idx].HWwirenum++;
@@ -1519,37 +2097,39 @@ void show_default(char *tmp)
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void set_term_global(uint8_t key, uint8_t term_id)
 {
-  int tt = thermostat_get_mezni(term_id);
-  if (key == TL_UP)
+  if (thermostat_get_ready(term_id) == 1)
   {
-    delay_show_menu = 0;
-    if (tt < MAX_TEMP)
-      tt = tt + 5;
-    thermostat_set_mezni(term_id, tt);
+    int tt = thermostat_get_mezni(term_id);
+    if (key == TL_UP)
+    {
+      delay_show_menu = 0;
+      if (tt < MAX_TEMP)
+        tt = tt + 5;
+      thermostat_set_mezni(term_id, tt);
 
-  }
-  if (key == TL_DOWN)
-  {
-    delay_show_menu = 0;
-    if (tt > MIN_TEMP)
-      tt = tt - 5;
-    thermostat_set_mezni(term_id, tt);
+    }
+    if (key == TL_DOWN)
+    {
+      delay_show_menu = 0;
+      if (tt > MIN_TEMP)
+        tt = tt - 5;
+      thermostat_set_mezni(term_id, tt);
+    }
   }
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  void show_term_set_global(void)
-  {
+
+void show_term_set_global(void)
+{
   show_term_set_global_id(0);
-  }
-*/
-/*
-  void show_term_set_global_id(uint8_t id)
-  {
+}
+
+void show_term_set_global_id(uint8_t id)
+{
   /// todo nejak vyresit predani pres parametr ///
-  uint8_t term_id = term_fast_set.args1;
+  uint8_t term_id = id;
   char tmp[10];
   char tmmp[10];
   int tt;
@@ -1605,45 +2185,10 @@ void set_term_global(uint8_t key, uint8_t term_id)
   tisice = tmp[2];
   destisice = tmp[1];
   statisice = tmp[0];
-  }
-*/
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  void show_term_max(void)
-  {
-  tecka = 0b00000000;
-  jednotky = ' ';
-  desitky = ' ';
-  stovky = 'X';
-  tisice = 'A';
-  destisice = 'M';
-  statisice = ' ';
-  }
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  void show_term_climate(void)
-  {
-  tecka = 0b00000000;
-  jednotky = ' ';
-  desitky = ' ';
-  stovky = 'N';
-  tisice = 'I';
-  destisice = 'M';
-  statisice = ' ';
-  }
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  void show_term_off(void)
-  {
-  tecka = 0b00000000;
-  jednotky = ' ';
-  desitky = ' ';
-  stovky = 'F';
-  tisice = 'F';
-  destisice = 'O';
-  statisice = ' ';
-  }
-*/
+
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void show_term_prog(void)
 {
@@ -1717,11 +2262,11 @@ void show_termstav(void)
   /// TODO neco mi stale prepisuje pametovou banku, overit co by mohlo
   strcpy(tmp, "-    -");
 
-  if (thermostat_get_stav(0) == TERM_STAV_STOP)
+  if (thermostat_get_status(0) == TERM_STAV_STOP)
   {
     strcpy(tmp, "T OFF ");
   }
-  if (thermostat_get_stav(0) == TERM_STAV_TOPI)
+  if (thermostat_get_status(0) == TERM_STAV_TOPI)
   {
     strcpy(tmp, "TON");
     struct_DDS18s20 tds;
@@ -1757,7 +2302,7 @@ void show_termstav(void)
     else
       strcpy(tmp, "T ERR");
   }
-  if (thermostat_get_stav(0) == TERM_OK)
+  if (thermostat_get_status(0) == TERM_OK)
   {
     strcpy(tmp, "T *OK*");
   }
@@ -1911,7 +2456,6 @@ void loop()
   char str3[20];
   char curr_menu[10];
   char curr_item[10];
-  uint8_t id;
   uint8_t itmp;
   char cmd[MAX_TEMP_BUFFER];
   char args[MAX_TEMP_BUFFER];
@@ -1960,27 +2504,43 @@ void loop()
   led = 0;
   led_old = 0;
   key = 0;
-  key_now = ~Bit_Reverse(read_from_mcp());
 
-  if (key_now != 0)
+  if ((milis - milis_key) > 50)
   {
-    if ((milis - milis_key) > 100)
+    milis_key = milis;
+    key_now = ~Bit_Reverse(read_from_mcp());
+    for (uint8_t idx = 0; idx < 8; idx++)
     {
-      milis_key = milis;
-      key = key_now;
-      key_press_cnt++;
-      if (key_press_cnt > 5)
+      uint8_t t = (1 << idx);
+      if ((key_now & t) != 0)
+      {
+        ///key press
+        // pokud drzim tlacitko tak nic
+        if ((key_release & t) != 0)
         {
-          key_press_cnt = 0;
-          key_press = key_now;
-          }
+          bitSet(key, idx);
+          bitClear(key_release, idx);
+        }
+        key_press_cnt[idx]++;
+        if (key_press_cnt[idx] > 20)
+        {
+          bitSet(key_press, idx);
+          /// ochrana proti preteceni
+          key_press_cnt[idx] = 21;
+        }
+      }
+      else
+      {
+        ///key release
+        bitSet(key_release, idx);
+        bitClear(key, idx);
+        bitClear(key_press, idx);
+        key_press_cnt[idx] = 0;
+      }
     }
   }
-  else
-  {
-    key_press = 0;
-    key_press_cnt = 0;
-  }
+
+
 
 
   if (last_sync > 100)
@@ -1993,7 +2553,7 @@ void loop()
   if (term_mode == TERM_MODE_MAX) led = led + LED_MAX;
   if (term_mode == TERM_MODE_PROG) led = led + LED_PROG;
   if (term_mode == TERM_MODE_MAN) led = led + LED_UP + LED_DOWN;
-  if (term_mode == TERM_MODE_CLIMATE) led = led + LED_MAX + LED_PROG;
+  if (term_mode == TERM_MODE_CLIMATE) led = led + LED_CLIMA;
 
   /// zapisuji do led registru pouze pri zmene
   if (led != led_old)
@@ -2003,12 +2563,8 @@ void loop()
   }
 
 
-
   get_current_menu(curr_menu);
   get_current_item(curr_item);
-
-
-
   //// defualt screen uplne hlavni menu
   if (strcmp_P(curr_menu, title_root_termostat) == 0)
   {
@@ -2018,20 +2574,196 @@ void loop()
       menu_rotate();
       key = 0;
     }
+    if (key == TL_OFF)
+    {
+      thermostat_set_mode(TERM_MODE_OFF);
+      menu_set_root_menu(&term_off);
+      delay_show_menu = 0;
+      key = 0;
+    }
+    if (key == TL_MAX)
+    {
+      thermostat_set_mode(TERM_MODE_MAX);
+      menu_set_root_menu(&term_max);
+      delay_show_menu = 0;
+      key = 0;
+    }
+    if (key == TL_PROG)
+    {
+      thermostat_set_mode(TERM_MODE_PROG);
+      menu_set_root_menu(&term_prog);
+      delay_show_menu = 0;
+      key = 0;
+    }
+    if (key == TL_CLIMA)
+    {
+      thermostat_set_mode(TERM_MODE_CLIMATE);
+      menu_set_root_menu(&term_climate);
+      delay_show_menu = 0;
+      key = 0;
+    }
+    if ((key == TL_UP) || (key == TL_DOWN))
+    {
+      thermostat_set_mode(TERM_MODE_MAN);
+      menu_set_root_menu(&term_man);
+      delay_show_menu = 0;
+      key = 0;
+    }
+
+    if (key_press == TL_OK)
+    {
+      menu_set_root_menu(&setup_menu);
+      key_press = 0;
+      key = 0;
+    }
+
   }
 
 
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  //////////////////// hlavni setup menu
+  if (strcmp_P(curr_menu, title_root_setup_menu) == 0)
+  {
+    if (key == TL_UP) menu_next();
+    if (key == TL_DOWN) menu_prev();
+    ////
+    if (key == TL_OK)
+    {
+      /// podmenu jas
+      if (strcmp_P(curr_item, title_item_menu_setup_jas) == 0)
+      {
+        menu_set_root_menu(&setup_menu_jas);
+        setup_menu_jas.args1 = (255 - jas_disp) / 15;
+        key = 0;
+      }
+    }
+  }
+  /// konec hlavniho setup menu
+  /////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  /// nastaveni jasu
+  if (strcmp_P(curr_menu, title_item_menu_setup_jas) == 0)
+  {
+    if (strcmp_P(curr_item, title_item_setup_jas) == 0)
+    {
+      uint8_t tmp8_1 = setup_menu_jas.args1;
+      if (key == TL_UP)
+      {
+        if (tmp8_1 < 17)tmp8_1++;
+      }
+      if (key == TL_DOWN)
+      {
+        if (tmp8_1 > 1)tmp8_1--;
+      }
+      setup_menu_jas.args1 = tmp8_1;
+      jas_disp = 255 - (15 * tmp8_1);
+      if (tmp8_1 == 17)
+      {
+        /// auto jas
+        led_display_text_string("A");
+      }
+      else
+      {
+        /// manualni jas
+        led_display_text_2(tmp8_1);
+        analogWrite(PWM_DISP, jas_disp);
+      }
+      if (key == TL_OK)
+      {
+        EEPROM.write(my_jas_disp, jas_disp);
+        menu_back_root_menu();
+      }
+    }
+  }
+  ///////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  if (strcmp_P(curr_menu, title_item_menu_setup_prog) == 0)
+  {
+    if (strcmp_P(curr_item, title_item_setup_prog) == 0)
+    {
+      uint8_t tmp8_1 = setup_menu_prog[get_current_menu_idx()].args1;
+      if (key == TL_UP)
+      {
+        if (tmp8_1 < AVAILABLE_PROGRAM)tmp8_1++;
+      }
+      if (key == TL_DOWN)
+      {
+        if (tmp8_1 > 1)tmp8_1--;
+      }
+      setup_menu_prog[get_current_menu_idx()].args1 = tmp8_1;
+      if (tmp8_1 == 0)
+        led_display_text_string("--");
+      else
+        led_display_text_2(tmp8_1);
+    }
+  }
 
+
+  /// vraceni se zpet po 10 sec
+  if (strcmp_P(curr_menu, title_root_termman) == 0)
+  {
+    if ((key == TL_UP) || (key == TL_DOWN))
+    {
+      set_term_global(key, 0);
+      delay_show_menu = 0;
+    }
+    if (delay_show_menu > 10) menu_back_root_menu();
+  }
+  if (strcmp_P(curr_menu, title_root_termoff) == 0)
+  {
+    if (key == TL_OFF) menu_back_root_menu();
+    if (delay_show_menu > 5) menu_back_root_menu();
+  }
+  if (strcmp_P(curr_menu, title_root_termmax) == 0)
+  {
+    if (key == TL_MAX) menu_back_root_menu();
+    if (delay_show_menu > 5) menu_back_root_menu();
+  }
+  if (strcmp_P(curr_menu, title_root_termprog) == 0)
+  {
+    if (key == TL_PROG) menu_back_root_menu();
+    if (delay_show_menu > 10) menu_back_root_menu();
+  }
+  if (strcmp_P(curr_menu, title_root_termclimate) == 0)
+  {
+    if (key == TL_CLIMA) menu_back_root_menu();
+    if (delay_show_menu > 10) menu_back_root_menu();
+  }
+  if (strcmp_P(curr_menu, title_error) == 0)
+  {
+    if (delay_show_menu > 2) menu_back_root_menu();
+  }
+
+  ///globalni back
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  if (strcmp_P(curr_item, title_item_menu_back) == 0)
+  {
+    if (key == TL_OK)
+    {
+      menu_back_root_menu();
+      key = 0;
+    }
+  }
 
   ////////////////////
   /// kazdych 10sec
-  if ((milis - milis_10s) > 3500)
+  if ((milis - milis_10s) > 4500)
   {
     milis_10s = milis;
+    send_mqtt_onewire();
+    send_mqtt_status();
+    send_mqtt_ring();
   }
 
 
-  if ((milis - milis_05s) > 175)
+  if ((milis - milis_05s) > 225)
   {
     milis_05s = milis;
     now = rtc.now();
@@ -2043,8 +2775,9 @@ void loop()
 
   ////////////////////
   /// kazdou 1sec
-  if ((milis - milis_1s) > 350)
+  if ((milis - milis_1s) > 454)
   {
+    delay_show_menu++;
     milis_1s = milis;
     uptime++;
     mereni_hwwire(1);
@@ -2056,6 +2789,7 @@ void loop()
       if (itmp > 240) itmp = 240;
       analogWrite(PWM_DISP, itmp);
     }
+    send_mqtt_tds();
 
   }
 
@@ -2142,6 +2876,19 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
 
 
 /*
+
+     GLCD_Clear();
+  GLCD_GotoXY(0, 0);
+  itoa(key, str1, 10);
+  GLCD_PrintString(str1);
+
+  GLCD_GotoXY(0, 16);
+  itoa(key_press, str1, 10);
+  GLCD_PrintString(str1);
+
+  GLCD_flip();
+  GLCD_Render();
+
   ////////////////////////////////////
   void send_ident(void)
   {
@@ -2681,72 +3428,7 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
     key = 0;
   }
   }
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-  //////////////////// hlavni setup menu
-  if (strcmp_P(curr_menu, title_root_setup_menu) == 0)
-  {
-  if (key == TL_UP) menu_next();
-  if (key == TL_DOWN) menu_prev();
-  ////
-  if (key == TL_OK)
-  {
-    /// podmenu rs485
-    if (strcmp_P(curr_item, title_item_menu_setup_bus) == 0)
-    {
-      menu_set_root_menu(&setup_menu_rs_id);
-      setup_menu_rs_id.args1 = rsid;
-      key = 0;
-    }
-    /// podmenu jas
-    if (strcmp_P(curr_item, title_item_menu_setup_jas) == 0)
-    {
-      menu_set_root_menu(&setup_menu_rs_jas);
-      setup_menu_rs_jas.args1 = (255 - jas_disp) / 15;
-      key = 0;
-    }
-  }
-  }
-  /// konec hlavniho setup menu
-  /////////////////////////////
-  //////////////////////////////////////////////////////////////////////////////////////////
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-  /// nastaveni jasu
-  if (strcmp_P(curr_menu, title_item_menu_setup_jas) == 0)
-  {
-  if (strcmp_P(curr_item, title_item_setup_jas) == 0)
-  {
-    uint8_t tmp8_1 = setup_menu_rs_jas.args1;
-    if (key == TL_MAX)
-    {
-      if (tmp8_1 < 17)tmp8_1++;
-    }
-    if (key == TL_OFF)
-    {
-      if (tmp8_1 > 1)tmp8_1--;
-    }
-    setup_menu_rs_jas.args1 = tmp8_1;
-    jas_disp = 255 - (15 * tmp8_1);
-    if (tmp8_1 == 17)
-    {
-      /// auto jas
-      led_display_text_string("A");
-    }
-    else
-    {
-      /// manualni jas
-      led_display_text_2(tmp8_1);
-      analogWrite(PWM_DISP, jas_disp);
-    }
-    if (key == TL_OK)
-    {
-      EEPROM.write(my_jas_disp, jas_disp);
-      menu_back_root_menu();
-    }
-  }
-  }
+
 
 
 */
@@ -2754,13 +3436,5 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
 
 /*
 
-   ///globalni back
-  if (strcmp_P(curr_item, title_item_menu_back) == 0)
-  {
-   if (key == TL_OK)
-   {
-     menu_back_root_menu();
-     key = 0;
-   }
-  }
+
 */
