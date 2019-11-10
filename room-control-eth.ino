@@ -176,29 +176,51 @@ typedef struct struct_status_DDS18s20
 
 typedef void (*function)();
 
-typedef struct ItemMenu
+typedef struct _ItemFunction
 {
   char *name;
   function on_show;
 };
 
+typedef struct _ItemStatic
+{
+  char *name;
+};
+
+typedef struct _ItemDynamic
+{
+  char *name;
+  char *stat;
+  char *repl;
+};
+
 typedef struct RootMenu
 {
   char *name;
-  ItemMenu *Item[MAX_ITEMS_ROOT_MENU];
+  _ItemFunction *ItemFunction;
+  _ItemStatic *ItemStatic;
+  _ItemDynamic *ItemDynamic;
   uint8_t items;
   uint8_t current_item;
   uint8_t args1;
   uint8_t args2;
   uint8_t args3;
-  uint8_t idx;
+  uint8_t type;
+  uint8_t len;
 };
+
+
+
+
+
+
 
 typedef struct Struct_RootHistory
 {
   RootMenu *history[MAX_HISTORY];
   uint8_t menu_max;
 };
+
 
 typedef struct struct_my_device
 {
@@ -299,33 +321,34 @@ char uart_recv[UART_RECV_MAX_SIZE];
 const char global_time_set[] PROGMEM = "global/time/set";
 const char global_time_ntp[] PROGMEM = "global/time/ntp";
 
-
-
-const char title_error[] PROGMEM = "error";
-
 const char title_root_termostat[] PROGMEM = "Term";
-const char title_item_menu_temp[] PROGMEM = "Teplota";
-const char title_item_menu_time[] PROGMEM = "Cas";
-const char title_item_menu_termstav[] PROGMEM = "TermStav";
-const char title_root_setup_menu[] PROGMEM = " SETUP";
-const char null_text[] PROGMEM = "";
-
-const char title_root_termclimate[] PROGMEM = "-MIN- ";
-const char title_root_termman[] PROGMEM = "-MAN- ";
-const char title_root_termprog[] PROGMEM = "-PROG-";
-const char title_root_termmax[] PROGMEM = "-MAX- ";
-const char title_root_termoff[] PROGMEM = "-OFF- ";
-
-
-const char title_item_menu_termset[] PROGMEM = "Termset";
-
-const char title_item_setup_jas[] PROGMEM  = "JAS $$";
-const char title_item_setup_prog[] PROGMEM  = "PROG$$";
-
-const char title_item_menu_setup_jas[] PROGMEM =  "n JAS ";
-const char title_item_menu_setup_prog[] PROGMEM =  "nPROG$";
-const char title_item_menu_back[] PROGMEM = " ZPET ";
+const char title_item_temp[] PROGMEM = "Teplota";
+const char title_item_time[] PROGMEM = "Cas";
+const char title_item_termstav[] PROGMEM = "TermStav";
 /*
+  const char title_error[] PROGMEM = "error";
+
+
+
+  const char title_root_setup_menu[] PROGMEM = " SETUP";
+  const char null_text[] PROGMEM = "";
+
+  const char title_root_termclimate[] PROGMEM = "-MIN- ";
+  const char title_root_termman[] PROGMEM = "-MAN- ";
+  const char title_root_termprog[] PROGMEM = "-PROG-";
+  const char title_root_termmax[] PROGMEM = "-MAX- ";
+  const char title_root_termoff[] PROGMEM = "-OFF- ";
+
+
+  const char title_item_menu_termset[] PROGMEM = "Termset";
+
+  const char title_item_setup_jas[] PROGMEM  = "JAS $$";
+  const char title_item_setup_prog[] PROGMEM  = "PROG$$";
+
+  const char title_item_menu_setup_jas[] PROGMEM =  "n JAS ";
+  const char title_item_menu_setup_prog[] PROGMEM =  "nPROG$";
+  const char title_item_menu_back[] PROGMEM = " ZPET ";
+  /*
 
   /*
 
@@ -354,31 +377,34 @@ char led_display_text[8];
 
 
 Struct_RootHistory RootHistory;
-
-
 RootMenu rm;
-ItemMenu menu_show_temp;
-ItemMenu menu_show_time;
-ItemMenu menu_show_termstav;
 
-RootMenu setup_menu;
+_ItemFunction Term_Menu_Items[3];
 
-RootMenu term_man;
-RootMenu term_max;
-RootMenu term_climate;
-RootMenu term_off;
-RootMenu term_prog;
-
-ItemMenu item_term_set_global;
-
-RootMenu setup_menu_jas;
-RootMenu setup_menu_prog[MAX_THERMOSTAT];
-
-
-ItemMenu item_setup_jas, item_setup_prog, item_back;
-ItemMenu item_setup_set_jas;
-ItemMenu item_setup_set_prog;
 /*
+  RootMenu rm;
+  ItemMenu menu_show_temp;
+  ItemMenu menu_show_time;
+  ItemMenu menu_show_termstav;
+
+  RootMenu setup_menu;
+
+  RootMenu term_man;
+  RootMenu term_max;
+  RootMenu term_climate;
+  RootMenu term_off;
+  RootMenu term_prog;
+
+  ItemMenu item_term_set_global;
+
+  RootMenu setup_menu_jas;
+  RootMenu setup_menu_prog[MAX_THERMOSTAT];
+
+
+  ItemMenu item_setup_jas, item_setup_prog, item_back;
+  ItemMenu item_setup_set_jas;
+  ItemMenu item_setup_set_prog;
+  /*
 
 */
 /*
@@ -439,6 +465,7 @@ uint8_t get_tds18s20(uint8_t idx, struct_DDS18s20 *tds)
   }
   return ret;
 }
+////////////////////////////////////////////////////////////
 void set_tds18s20(uint8_t idx, struct_DDS18s20 *tds)
 {
   EEPROM.write(wire_know_rom_0 + (idx * 20), tds->used);
@@ -451,7 +478,6 @@ void set_tds18s20(uint8_t idx, struct_DDS18s20 *tds)
   EEPROM.write(wire_know_rom_0 + (idx * 20) + 10, (tds->offset >> 8) & 0xff);
   EEPROM.write(wire_know_rom_0 + (idx * 20) + 11, (tds->offset) & 0xff);
 }
-
 /////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void new_parse_at(char *input, char *out1, char *out2)
@@ -480,13 +506,11 @@ void new_parse_at(char *input, char *out1, char *out2)
     count++;
   }
 }
-
 //////////////////////////////////////////////////////////////////////////
 void send_at(uint8_t id, char *cmd, char *args)
 {
   char tmp1[MAX_TEMP_BUFFER];
   char tmp2[8];
-
   tmp1[0] = 0;
   tmp2[0] = 0;
   //digitalWrite(rs485, HIGH);
@@ -504,9 +528,7 @@ void send_at(uint8_t id, char *cmd, char *args)
   Serial.println(tmp1);
   Serial.flush();
   //digitalWrite(rs485, LOW);
-
 }
-
 /////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 void read_at(char *input)
@@ -560,49 +582,71 @@ endloop:;
 
 //saric
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+
 void menu_history_init(RootMenu *rm)
 {
   RootHistory.history[0] = rm;
   RootHistory.menu_max = 0;
 }
+
 ///////////////////////////////////////
-void menu_init(RootMenu *rm)
+void menu_init(RootMenu *rm, char *name, uint8_t type)
 {
-  for (uint8_t itm = 0; itm < MAX_ITEMS_ROOT_MENU; itm++)
-  {
-    rm->Item[itm] = nullptr;
-  }
   rm->items = 0;
   rm->current_item = 0;
-  rm->idx = 255;
+  rm->type = type;
+  rm->name = name;
+  rm->ItemFunction = nullptr;
+  rm->ItemStatic = nullptr;
+  rm->ItemDynamic = nullptr;
 }
-////////////////////////////////////
-void menu_set_root_menu(RootMenu *rm)
+
+void menu_set_item_function(RootMenu *rm, _ItemFunction *IF, uint8_t len)
 {
+  rm->len = len;
+  rm->ItemFunction = IF;
+}
+
+void item_Function_add_function(_ItemFunction *IF, uint8_t idx, function fce, char *name)
+{
+  IF[idx].on_show = fce;
+  IF[idx].name = name;
+}
+
+////////////////////////////////////
+/*
+  void menu_set_root_menu(RootMenu *rm)
+  {
   if (RootHistory.menu_max < MAX_HISTORY)
   {
     RootHistory.menu_max++;
     RootHistory.history[RootHistory.menu_max] = rm;
   }
-}
+  }
+*/
 //////////////////////////////////
-void menu_back_root_menu(void)
-{
+/*
+  void menu_back_root_menu(void)
+  {
   if (RootHistory.menu_max > 0 ) RootHistory.menu_max--;
-}
+  }
+*/
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void menu_root_setname(RootMenu *rm, char *name)
-{
+/*
+  void menu_root_setname(RootMenu *rm, char *name)
+  {
   rm->name = name;
-}
+  }
 
-void menu_root_setidx(RootMenu *rm, uint8_t idx)
-{
+  void menu_root_setidx(RootMenu *rm, uint8_t idx)
+  {
   rm->idx = idx;
-}
+  }
+*/
 ///////////////////////////////////////
-bool menu_root_additem(RootMenu *rm, ItemMenu *item)
-{
+/*
+  bool menu_root_additem(RootMenu *rm, ItemMenu *item)
+  {
   if (rm->items < MAX_ITEMS_ROOT_MENU)
   {
     for (uint8_t itm = 0; itm < MAX_ITEMS_ROOT_MENU; itm++)
@@ -615,10 +659,12 @@ bool menu_root_additem(RootMenu *rm, ItemMenu *item)
   }
   else
     return false;
-}
+  }
+*/
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-bool menu_root_deleteitem(RootMenu *rm, ItemMenu *item)
-{
+/*
+  bool menu_root_deleteitem(RootMenu *rm, ItemMenu *item)
+  {
   if (rm->items > 0)
   {
     for (uint8_t itm = 0; itm < MAX_ITEMS_ROOT_MENU; itm++)
@@ -631,16 +677,25 @@ bool menu_root_deleteitem(RootMenu *rm, ItemMenu *item)
   }
   else
     return false;
-}
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void menu_item_set_properties(ItemMenu *item, char *name, function on_show )
-{
+  }
+*/
+/*
+  ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  void menu_item_set_properties(ItemMenu *item, char *name, function on_show )
+  {
   item->name = name;
   item->on_show = on_show;
-}
+  }
+*/
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void menu_display(void)
 {
+
+}
+
+/*
+  void menu_display(void)
+  {
   static char tmp[8];
   RootMenu _rm;
   uint8_t t, te;
@@ -677,34 +732,30 @@ void menu_display(void)
   {
     strcpy_P(tmp, _rm.name);
     show_default(tmp);
-    /*
+    /////*
       GLCD_Clear();
       GLCD_GotoXY(0, 0);
       GLCD_PrintString(tmp);
       GLCD_flip();
       GLCD_Render();
-    */
+    //////
   }
-}
-
+  }
+*/
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void get_current_menu(char *text)
 {
   strcpy_P(text, RootHistory.history[RootHistory.menu_max]->name);
 }
 
-uint8_t get_current_menu_idx()
-{
-  return RootHistory.history[RootHistory.menu_max]->idx;
-}
 
 void get_current_item(char *tmp)
 {
   strcpy(tmp, "");
   RootMenu _rm;
   _rm = *RootHistory.history[RootHistory.menu_max];
-  /// ochrana pokud k menu pridana polozka, vracim prazdny napis polozky
-  if (_rm.items > 0 ) strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
+  /// ochrana pokud k menu neni pridana polozka, vracim prazdny napis polozky
+  //if (_rm.items > 0 ) strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
 }
 
 
@@ -1476,64 +1527,69 @@ void setup(void) {
   jednotky = '-';
   display_pos = 0;
 
-
   menu_history_init(&rm);
-  menu_init(&rm);
-  menu_root_setname(&rm, title_root_termostat);
+  menu_init(&rm, title_root_termostat, 0);
 
+  //////item_Function_add_function(_ItemFunction *IF, uint8_t idx, function fce, char *name)
+  item_Function_add_function(Term_Menu_Items, 0, show_temp_default, title_item_temp);
+  item_Function_add_function(Term_Menu_Items, 1, show_time, title_item_time);
+  item_Function_add_function(Term_Menu_Items, 2, show_termstav, title_item_termstav);
 
-  menu_item_set_properties(&menu_show_temp, title_item_menu_temp, show_temp_default);
-  menu_item_set_properties(&menu_show_time, title_item_menu_time, show_time);
-  menu_item_set_properties(&menu_show_termstav, title_item_menu_termstav, show_termstav);
+  menu_set_item_function(&rm, Term_Menu_Items, 3);
 
-  menu_root_additem(&rm, &menu_show_time);
-  menu_root_additem(&rm, &menu_show_temp);
-  menu_root_additem(&rm, &menu_show_termstav);
-
-  menu_init(&setup_menu);
-  menu_root_setname(&setup_menu, title_root_setup_menu);
-
-  menu_init(&term_man);
-  menu_init(&term_max);
-  menu_init(&term_off);
-  menu_init(&term_prog);
-  menu_init(&term_climate);
-
-  menu_root_setname(&term_man, title_root_termman);
-  menu_root_setname(&term_prog, title_root_termprog);
-  menu_root_setname(&term_max, title_root_termmax);
-  menu_root_setname(&term_climate, title_root_termclimate);
-  menu_root_setname(&term_off, title_root_termoff);
-
-
-  menu_item_set_properties(&item_term_set_global, title_item_menu_termset, show_term_set_global);
-  menu_root_additem(&term_man, &item_term_set_global);
-
-  menu_init(&setup_menu_jas);
-  menu_root_setname(&setup_menu_jas, title_item_menu_setup_jas);
-
-  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
-  {
-    menu_init(&setup_menu_prog[idx]);
-    menu_root_setname(&setup_menu_prog[idx], title_item_menu_setup_prog);
-    menu_root_setidx(&setup_menu_prog[idx], idx);
-  }
-  //menu_init(&rm_error);
-  menu_item_set_properties(&item_setup_jas, title_item_menu_setup_jas , nullptr);
-  menu_item_set_properties(&item_setup_prog, title_item_menu_setup_prog , nullptr);
-  menu_item_set_properties(&item_back, title_item_menu_back, back);
-
-  menu_root_additem(&setup_menu, &item_setup_jas);
-
-  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++) menu_root_additem(&setup_menu, &item_setup_prog);
-  menu_root_additem(&setup_menu, &item_back);
-
-  menu_item_set_properties(&item_setup_set_jas, title_item_setup_jas, nullptr);
-  menu_root_additem(&setup_menu_jas, &item_setup_set_jas);
-
-  menu_item_set_properties(&item_setup_set_prog, title_item_setup_prog, nullptr);
-  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++) menu_root_additem(&setup_menu_prog[idx], &item_setup_set_prog);
   /*
+      menu_item_set_properties(&menu_show_temp, title_item_menu_temp, show_temp_default);
+      menu_item_set_properties(&menu_show_time, title_item_menu_time, show_time);
+      menu_item_set_properties(&menu_show_termstav, title_item_menu_termstav, show_termstav);
+
+      menu_root_additem(&rm, &menu_show_time);
+      menu_root_additem(&rm, &menu_show_temp);
+      menu_root_additem(&rm, &menu_show_termstav);
+
+      menu_init(&setup_menu);
+      menu_root_setname(&setup_menu, title_root_setup_menu);
+
+      menu_init(&term_man);
+      menu_init(&term_max);
+      menu_init(&term_off);
+      menu_init(&term_prog);
+      menu_init(&term_climate);
+
+      menu_root_setname(&term_man, title_root_termman);
+      menu_root_setname(&term_prog, title_root_termprog);
+      menu_root_setname(&term_max, title_root_termmax);
+      menu_root_setname(&term_climate, title_root_termclimate);
+      menu_root_setname(&term_off, title_root_termoff);
+
+
+      menu_item_set_properties(&item_term_set_global, title_item_menu_termset, show_term_set_global);
+      menu_root_additem(&term_man, &item_term_set_global);
+
+      menu_init(&setup_menu_jas);
+      menu_root_setname(&setup_menu_jas, title_item_menu_setup_jas);
+
+      for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+      {
+        menu_init(&setup_menu_prog[idx]);
+        menu_root_setname(&setup_menu_prog[idx], title_item_menu_setup_prog);
+        menu_root_setidx(&setup_menu_prog[idx], idx);
+      }
+      //menu_init(&rm_error);
+      menu_item_set_properties(&item_setup_jas, title_item_menu_setup_jas , nullptr);
+      menu_item_set_properties(&item_setup_prog, title_item_menu_setup_prog , nullptr);
+      menu_item_set_properties(&item_back, title_item_menu_back, back);
+
+      menu_root_additem(&setup_menu, &item_setup_jas);
+
+      for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++) menu_root_additem(&setup_menu, &item_setup_prog);
+      menu_root_additem(&setup_menu, &item_back);
+
+      menu_item_set_properties(&item_setup_set_jas, title_item_setup_jas, nullptr);
+      menu_root_additem(&setup_menu_jas, &item_setup_set_jas);
+
+      menu_item_set_properties(&item_setup_set_prog, title_item_setup_prog, nullptr);
+      for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++) menu_root_additem(&setup_menu_prog[idx], &item_setup_set_prog);
+      /*
   */
   /*
 
@@ -2084,7 +2140,7 @@ void shiftout(uint16_t data)
   digitalWrite(PCLK, 1);
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void show_default(char *tmp)
+void show_direct(char *tmp)
 {
   jednotky = tmp[5];
   desitky = tmp[4];
@@ -2095,8 +2151,9 @@ void show_default(char *tmp)
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void set_term_global(uint8_t key, uint8_t term_id)
-{
+/*
+  void set_term_global(uint8_t key, uint8_t term_id)
+  {
   if (thermostat_get_ready(term_id) == 1)
   {
     int tt = thermostat_get_mezni(term_id);
@@ -2116,18 +2173,19 @@ void set_term_global(uint8_t key, uint8_t term_id)
       thermostat_set_mezni(term_id, tt);
     }
   }
-}
+  }
+*/
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-void show_term_set_global(void)
-{
+/*
+  void show_term_set_global(void)
+  {
   show_term_set_global_id(0);
-}
+  }
 
-void show_term_set_global_id(uint8_t id)
-{
+  void show_term_set_global_id(uint8_t id)
+  {
   /// todo nejak vyresit predani pres parametr ///
   uint8_t term_id = id;
   char tmp[10];
@@ -2185,13 +2243,14 @@ void show_term_set_global_id(uint8_t id)
   tisice = tmp[2];
   destisice = tmp[1];
   statisice = tmp[0];
-}
-
+  }
+*/
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void show_term_prog(void)
-{
+/*
+  void show_term_prog(void)
+  {
   char c[3];
   tecka = 0b00000000;
   uint8_t pi = thermostat_get_program_id(0);
@@ -2220,12 +2279,13 @@ void show_term_prog(void)
   tisice = ' ';
   destisice = 'R';
   statisice = 'P';
-}
-
+  }
+*/
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void set_term_prog(uint8_t key)
-{
+/*
+  void set_term_prog(uint8_t key)
+  {
   uint8_t poc;
   poc = thermostat_get_program_id(0);
   if (key == TL_UP)
@@ -2241,20 +2301,22 @@ void set_term_prog(uint8_t key)
   }
   ///
   thermostat_set_program_id(0, poc);
-}
+  }
+*/
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void back(void)
 {
   char tmp[8];
   get_current_item(tmp);
-  show_default(tmp);
+  show_direct(tmp);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void show_termstav(void)
-{
+
+  void show_termstav(void)
+  {
   char tmp[8];
   char tml[5];
   tmp[0] = 0;
@@ -2312,12 +2374,14 @@ void show_termstav(void)
   tisice = tmp[2];
   destisice = tmp[1];
   statisice = tmp[0];
-}
+  }
+
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void show_temp_default(void)
-{
+
+  void show_temp_default(void)
+  {
   char c[4];
   int tt;
   char tmp[8];
@@ -2360,10 +2424,11 @@ void show_temp_default(void)
   tisice = tmp[2];
   destisice = tmp[1];
   statisice = tmp[0];
-}
+  }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 void show_time(void)
 {
   char c[4];
@@ -2409,35 +2474,37 @@ uint8_t Bit_Reverse( uint8_t x )
 
 
 
-
-void led_display_text_2(uint8_t input)
-{
+/*
+  void led_display_text_2(uint8_t input)
+  {
   char c[4];
   led_display_text[0] = 0;
   if (input < 10) strcpy(led_display_text, " ");
   itoa(input, c, 10);
   strcat(led_display_text, c);
   tecka = 0;
-}
+  }
 
-void led_display_text_string(char *input)
-{
+  void led_display_text_string(char *input)
+  {
   led_display_text[0] = 0;
   if (strlen(input) < 2) strcpy(led_display_text, " ");
   strcat(led_display_text, input);
   tecka = 0;
-}
+  }
+*/
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void f_error(void)
-{
+/*
+  void f_error(void)
+  {
   jednotky = led_display_text[5];
   desitky = led_display_text[4];
   stovky = led_display_text[3];
   tisice = led_display_text[2];
   destisice = led_display_text[1];
   statisice = led_display_text[0];
-}
-
+  }
+*/
 
 
 
@@ -2562,195 +2629,196 @@ void loop()
     write_to_mcp(~led);
   }
 
-
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-  //// defualt screen uplne hlavni menu
-  if (strcmp_P(curr_menu, title_root_termostat) == 0)
-  {
-    /// prepinej zobrazeni cas/teplota/stav termostatu
-    if (key == TL_OK)
+  /*
+    get_current_menu(curr_menu);
+    get_current_item(curr_item);
+    //// defualt screen uplne hlavni menu
+    if (strcmp_P(curr_menu, title_root_termostat) == 0)
     {
-      menu_rotate();
-      key = 0;
-    }
-    if (key == TL_OFF)
-    {
-      thermostat_set_mode(TERM_MODE_OFF);
-      menu_set_root_menu(&term_off);
-      delay_show_menu = 0;
-      key = 0;
-    }
-    if (key == TL_MAX)
-    {
-      thermostat_set_mode(TERM_MODE_MAX);
-      menu_set_root_menu(&term_max);
-      delay_show_menu = 0;
-      key = 0;
-    }
-    if (key == TL_PROG)
-    {
-      thermostat_set_mode(TERM_MODE_PROG);
-      menu_set_root_menu(&term_prog);
-      delay_show_menu = 0;
-      key = 0;
-    }
-    if (key == TL_CLIMA)
-    {
-      thermostat_set_mode(TERM_MODE_CLIMATE);
-      menu_set_root_menu(&term_climate);
-      delay_show_menu = 0;
-      key = 0;
-    }
-    if ((key == TL_UP) || (key == TL_DOWN))
-    {
-      thermostat_set_mode(TERM_MODE_MAN);
-      menu_set_root_menu(&term_man);
-      delay_show_menu = 0;
-      key = 0;
-    }
-
-    if (key_press == TL_OK)
-    {
-      menu_set_root_menu(&setup_menu);
-      key_press = 0;
-      key = 0;
-    }
-
-  }
-
-
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-  //////////////////// hlavni setup menu
-  if (strcmp_P(curr_menu, title_root_setup_menu) == 0)
-  {
-    if (key == TL_UP) menu_next();
-    if (key == TL_DOWN) menu_prev();
-    ////
-    if (key == TL_OK)
-    {
-      /// podmenu jas
-      if (strcmp_P(curr_item, title_item_menu_setup_jas) == 0)
+      /// prepinej zobrazeni cas/teplota/stav termostatu
+      if (key == TL_OK)
       {
-        menu_set_root_menu(&setup_menu_jas);
-        setup_menu_jas.args1 = (255 - jas_disp) / 15;
+        menu_rotate();
+        key = 0;
+      }
+      if (key == TL_OFF)
+      {
+        thermostat_set_mode(TERM_MODE_OFF);
+        menu_set_root_menu(&term_off);
+        delay_show_menu = 0;
+        key = 0;
+      }
+      if (key == TL_MAX)
+      {
+        thermostat_set_mode(TERM_MODE_MAX);
+        menu_set_root_menu(&term_max);
+        delay_show_menu = 0;
+        key = 0;
+      }
+      if (key == TL_PROG)
+      {
+        thermostat_set_mode(TERM_MODE_PROG);
+        menu_set_root_menu(&term_prog);
+        delay_show_menu = 0;
+        key = 0;
+      }
+      if (key == TL_CLIMA)
+      {
+        thermostat_set_mode(TERM_MODE_CLIMATE);
+        menu_set_root_menu(&term_climate);
+        delay_show_menu = 0;
+        key = 0;
+      }
+      if ((key == TL_UP) || (key == TL_DOWN))
+      {
+        thermostat_set_mode(TERM_MODE_MAN);
+        menu_set_root_menu(&term_man);
+        delay_show_menu = 0;
+        key = 0;
+      }
+
+      if (key_press == TL_OK)
+      {
+        menu_set_root_menu(&setup_menu);
+        key_press = 0;
+        key = 0;
+      }
+
+    }
+
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    get_current_menu(curr_menu);
+    get_current_item(curr_item);
+    //////////////////// hlavni setup menu
+    if (strcmp_P(curr_menu, title_root_setup_menu) == 0)
+    {
+      if (key == TL_UP) menu_next();
+      if (key == TL_DOWN) menu_prev();
+      ////
+      if (key == TL_OK)
+      {
+        /// podmenu jas
+        if (strcmp_P(curr_item, title_item_menu_setup_jas) == 0)
+        {
+          menu_set_root_menu(&setup_menu_jas);
+          setup_menu_jas.args1 = (255 - jas_disp) / 15;
+          key = 0;
+        }
+      }
+    }
+    /// konec hlavniho setup menu
+    /////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////
+    get_current_menu(curr_menu);
+    get_current_item(curr_item);
+    /// nastaveni jasu
+    if (strcmp_P(curr_menu, title_item_menu_setup_jas) == 0)
+    {
+      if (strcmp_P(curr_item, title_item_setup_jas) == 0)
+      {
+        uint8_t tmp8_1 = setup_menu_jas.args1;
+        if (key == TL_UP)
+        {
+          if (tmp8_1 < 17)tmp8_1++;
+        }
+        if (key == TL_DOWN)
+        {
+          if (tmp8_1 > 1)tmp8_1--;
+        }
+        setup_menu_jas.args1 = tmp8_1;
+        jas_disp = 255 - (15 * tmp8_1);
+        if (tmp8_1 == 17)
+        {
+          /// auto jas
+          led_display_text_string("A");
+        }
+        else
+        {
+          /// manualni jas
+          led_display_text_2(tmp8_1);
+          analogWrite(PWM_DISP, jas_disp);
+        }
+        if (key == TL_OK)
+        {
+          EEPROM.write(my_jas_disp, jas_disp);
+          menu_back_root_menu();
+        }
+      }
+    }
+    ///////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////
+    get_current_menu(curr_menu);
+    get_current_item(curr_item);
+    if (strcmp_P(curr_menu, title_item_menu_setup_prog) == 0)
+    {
+      if (strcmp_P(curr_item, title_item_setup_prog) == 0)
+      {
+        uint8_t tmp8_1 = setup_menu_prog[get_current_menu_idx()].args1;
+        if (key == TL_UP)
+        {
+          if (tmp8_1 < AVAILABLE_PROGRAM)tmp8_1++;
+        }
+        if (key == TL_DOWN)
+        {
+          if (tmp8_1 > 1)tmp8_1--;
+        }
+        setup_menu_prog[get_current_menu_idx()].args1 = tmp8_1;
+        if (tmp8_1 == 0)
+          led_display_text_string("--");
+        else
+          led_display_text_2(tmp8_1);
+      }
+    }
+
+
+    /// vraceni se zpet po 10 sec
+    if (strcmp_P(curr_menu, title_root_termman) == 0)
+    {
+      if ((key == TL_UP) || (key == TL_DOWN))
+      {
+        set_term_global(key, 0);
+        delay_show_menu = 0;
+      }
+      if (delay_show_menu > 10) menu_back_root_menu();
+    }
+    if (strcmp_P(curr_menu, title_root_termoff) == 0)
+    {
+      if (key == TL_OFF) menu_back_root_menu();
+      if (delay_show_menu > 5) menu_back_root_menu();
+    }
+    if (strcmp_P(curr_menu, title_root_termmax) == 0)
+    {
+      if (key == TL_MAX) menu_back_root_menu();
+      if (delay_show_menu > 5) menu_back_root_menu();
+    }
+    if (strcmp_P(curr_menu, title_root_termprog) == 0)
+    {
+      if (key == TL_PROG) menu_back_root_menu();
+      if (delay_show_menu > 10) menu_back_root_menu();
+    }
+    if (strcmp_P(curr_menu, title_root_termclimate) == 0)
+    {
+      if (key == TL_CLIMA) menu_back_root_menu();
+      if (delay_show_menu > 10) menu_back_root_menu();
+    }
+    if (strcmp_P(curr_menu, title_error) == 0)
+    {
+      if (delay_show_menu > 2) menu_back_root_menu();
+    }
+
+    ///globalni back
+    get_current_menu(curr_menu);
+    get_current_item(curr_item);
+    if (strcmp_P(curr_item, title_item_menu_back) == 0)
+    {
+      if (key == TL_OK)
+      {
+        menu_back_root_menu();
         key = 0;
       }
     }
-  }
-  /// konec hlavniho setup menu
-  /////////////////////////////
-  //////////////////////////////////////////////////////////////////////////////////////////
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-  /// nastaveni jasu
-  if (strcmp_P(curr_menu, title_item_menu_setup_jas) == 0)
-  {
-    if (strcmp_P(curr_item, title_item_setup_jas) == 0)
-    {
-      uint8_t tmp8_1 = setup_menu_jas.args1;
-      if (key == TL_UP)
-      {
-        if (tmp8_1 < 17)tmp8_1++;
-      }
-      if (key == TL_DOWN)
-      {
-        if (tmp8_1 > 1)tmp8_1--;
-      }
-      setup_menu_jas.args1 = tmp8_1;
-      jas_disp = 255 - (15 * tmp8_1);
-      if (tmp8_1 == 17)
-      {
-        /// auto jas
-        led_display_text_string("A");
-      }
-      else
-      {
-        /// manualni jas
-        led_display_text_2(tmp8_1);
-        analogWrite(PWM_DISP, jas_disp);
-      }
-      if (key == TL_OK)
-      {
-        EEPROM.write(my_jas_disp, jas_disp);
-        menu_back_root_menu();
-      }
-    }
-  }
-  ///////////////////////////////////////////////////////////
-  //////////////////////////////////////////////////////////
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-  if (strcmp_P(curr_menu, title_item_menu_setup_prog) == 0)
-  {
-    if (strcmp_P(curr_item, title_item_setup_prog) == 0)
-    {
-      uint8_t tmp8_1 = setup_menu_prog[get_current_menu_idx()].args1;
-      if (key == TL_UP)
-      {
-        if (tmp8_1 < AVAILABLE_PROGRAM)tmp8_1++;
-      }
-      if (key == TL_DOWN)
-      {
-        if (tmp8_1 > 1)tmp8_1--;
-      }
-      setup_menu_prog[get_current_menu_idx()].args1 = tmp8_1;
-      if (tmp8_1 == 0)
-        led_display_text_string("--");
-      else
-        led_display_text_2(tmp8_1);
-    }
-  }
-
-
-  /// vraceni se zpet po 10 sec
-  if (strcmp_P(curr_menu, title_root_termman) == 0)
-  {
-    if ((key == TL_UP) || (key == TL_DOWN))
-    {
-      set_term_global(key, 0);
-      delay_show_menu = 0;
-    }
-    if (delay_show_menu > 10) menu_back_root_menu();
-  }
-  if (strcmp_P(curr_menu, title_root_termoff) == 0)
-  {
-    if (key == TL_OFF) menu_back_root_menu();
-    if (delay_show_menu > 5) menu_back_root_menu();
-  }
-  if (strcmp_P(curr_menu, title_root_termmax) == 0)
-  {
-    if (key == TL_MAX) menu_back_root_menu();
-    if (delay_show_menu > 5) menu_back_root_menu();
-  }
-  if (strcmp_P(curr_menu, title_root_termprog) == 0)
-  {
-    if (key == TL_PROG) menu_back_root_menu();
-    if (delay_show_menu > 10) menu_back_root_menu();
-  }
-  if (strcmp_P(curr_menu, title_root_termclimate) == 0)
-  {
-    if (key == TL_CLIMA) menu_back_root_menu();
-    if (delay_show_menu > 10) menu_back_root_menu();
-  }
-  if (strcmp_P(curr_menu, title_error) == 0)
-  {
-    if (delay_show_menu > 2) menu_back_root_menu();
-  }
-
-  ///globalni back
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-  if (strcmp_P(curr_item, title_item_menu_back) == 0)
-  {
-    if (key == TL_OK)
-    {
-      menu_back_root_menu();
-      key = 0;
-    }
-  }
+  */
 
   ////////////////////
   /// kazdych 10sec
