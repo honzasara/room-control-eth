@@ -2,18 +2,18 @@
 
 #include <ArduinoJson.h>
 
-#include "SSD1306.h"
+
 #include <PubSubClient.h>
 #include <UIPEthernet.h>
 
 
-//#include <nRF24L01.h>
-//#include <RF24.h>
-//#include <RF24_config.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+#include <RF24_config.h>
 
 #include <avr/pgmspace.h>
 #include "font_alfa.h"
-#include "Font5x8.h"
+
 #include <avr/wdt.h>
 #include <avr/boot.h>
 
@@ -22,7 +22,9 @@
 #include <ow.h>
 #include <EEPROM.h>
 
-
+#define TYPE_FUNCTION 0
+#define TYPE_STATIC 1
+#define TYPE_DYNAMIC 2
 
 #define HW_ONEWIRE_MAXROMS 5
 #define HW_ONEWIRE_MAXDEVICES 5
@@ -44,6 +46,9 @@
 #define TERM_MODE_PROG 2
 #define TERM_MODE_MAN 3
 #define TERM_MODE_CLIMATE 4
+
+#define POWER_OUTPUT_OFF 0
+#define POWER_OUTPUT_MAX 1
 
 #define set_default_values 90
 #define my_sense 91
@@ -70,7 +75,6 @@
    uint8_t associate_output 19
 */
 #define eeprom_thermostat_1 120
-
 #define eeprom_thermostat_2 140
 
 
@@ -174,46 +178,28 @@ typedef struct struct_status_DDS18s20
   uint8_t online;
 };
 
-typedef void (*function)();
+typedef void (*function)(char *tmp, uint8_t args);
 
-typedef struct _ItemFunction
+
+typedef struct ItemMenu
 {
   char *name;
   function on_show;
-};
-
-typedef struct _ItemStatic
-{
-  char *name;
-};
-
-typedef struct _ItemDynamic
-{
-  char *name;
-  char *stat;
-  char *repl;
+  uint8_t type;
+  uint8_t first;
+  uint8_t last;
 };
 
 typedef struct RootMenu
 {
   char *name;
-  _ItemFunction *ItemFunction;
-  _ItemStatic *ItemStatic;
-  _ItemDynamic *ItemDynamic;
+  ItemMenu *Item[MAX_ITEMS_ROOT_MENU];
   uint8_t items;
   uint8_t current_item;
   uint8_t args1;
   uint8_t args2;
   uint8_t args3;
-  uint8_t type;
-  uint8_t len;
 };
-
-
-
-
-
-
 
 typedef struct Struct_RootHistory
 {
@@ -234,6 +220,7 @@ typedef struct struct_my_device
   uint16_t mqtt_port = 1883;
   char mqtt_user[20];
   char mqtt_key[20];
+  uint8_t ntp_server[4];
 };
 
 #define nextfree 260
@@ -247,7 +234,8 @@ typedef struct struct_my_device
 #define device_mqtt_port 296 /// 2
 #define device_mqtt_user 298 /// 20
 #define device_mqtt_key 318 /// 20
-#define nextttt 338
+#define device_ntp_server 338 ///4
+#define nexxxxxt 342
 
 
 
@@ -260,7 +248,7 @@ EthernetUDP udpClient;
 PubSubClient mqtt_client(ethClient);
 NTPClient timeClient(udpClient);
 
-
+RF24 nRF(NRF_CE, NRF_CS);
 
 
 struct_my_device device;
@@ -281,7 +269,7 @@ uint8_t led, led_old;
 volatile uint8_t rsid;
 uint8_t ppwm = 0;
 uint32_t uptime = 0;
-uint32_t max_program = 0;
+//uint32_t max_program = 0;
 uint8_t term_mode = 0;
 uint16_t timer3_counter;
 uint8_t display_pos;
@@ -306,6 +294,11 @@ uint8_t re_at = 0;
 uint8_t r_id = 0;
 char uart_recv[UART_RECV_MAX_SIZE];
 
+byte adresaPrijimac[] = "prijimac00";
+char nrf_receive_data;
+
+uint8_t link_status;
+
 /*
   const char at_term_light[] PROGMEM =  "term/light";
   const char at_term_brightness[] PROGMEM = "term/brightness";
@@ -320,125 +313,307 @@ char uart_recv[UART_RECV_MAX_SIZE];
 
 const char global_time_set[] PROGMEM = "global/time/set";
 const char global_time_ntp[] PROGMEM = "global/time/ntp";
-
-const char title_root_termostat[] PROGMEM = "Term";
-const char title_item_temp[] PROGMEM = "Teplota";
-const char title_item_time[] PROGMEM = "Cas";
-const char title_item_termstav[] PROGMEM = "TermStav";
-/*
-  const char title_error[] PROGMEM = "error";
-
-
-
-  const char title_root_setup_menu[] PROGMEM = " SETUP";
-  const char null_text[] PROGMEM = "";
-
-  const char title_root_termclimate[] PROGMEM = "-MIN- ";
-  const char title_root_termman[] PROGMEM = "-MAN- ";
-  const char title_root_termprog[] PROGMEM = "-PROG-";
-  const char title_root_termmax[] PROGMEM = "-MAX- ";
-  const char title_root_termoff[] PROGMEM = "-OFF- ";
-
-
-  const char title_item_menu_termset[] PROGMEM = "Termset";
-
-  const char title_item_setup_jas[] PROGMEM  = "JAS $$";
-  const char title_item_setup_prog[] PROGMEM  = "PROG$$";
-
-  const char title_item_menu_setup_jas[] PROGMEM =  "n JAS ";
-  const char title_item_menu_setup_prog[] PROGMEM =  "nPROG$";
-  const char title_item_menu_back[] PROGMEM = " ZPET ";
-  /*
-
-  /*
-
-
-
-
-
-
-
-
-
-  const char title_item_menu_setup_bus[] PROGMEM =  "RS485";
-
-
-  //const char title_item_setup_rs_id[] PROGMEM  = "nRS $$";
-
-*/
-
-
-
 const char mqtt_header_in[] PROGMEM  = "/thermctl-in/";
 const char mqtt_header_out[] PROGMEM  = "/thermctl-out/";
+
+const char title_root_termostat[] PROGMEM = "Trmst";
+const char title_item_menu_temp[] PROGMEM = "Teplota";
+const char title_item_menu_time[] PROGMEM = "Cas";
+
+const char title_term_climate[] PROGMEM = "-MIN- ";
+const char title_term_man[] PROGMEM = "MAN$*$";
+const char title_term_prog[] PROGMEM = "-PROG-";
+const char title_term_max[] PROGMEM = "-MAX- ";
+const char title_term_off[] PROGMEM = "-OFF- ";
+
+const char title_setup_menu[] PROGMEM = "Setup";
+const char title_error[] PROGMEM = "ERROR";
+const char title_menu_back[] PROGMEM = "-ZPET-";
+
+const char title_item_mqtt_status[] PROGMEM = "-MQQT-";
+const char title_item_setup_jas[] PROGMEM = "-nJAS-";
+const char title_item_select_prog[] PROGMEM = "-nPROG";
+const char title_item_setup_jas_dynamic[] PROGMEM = "JAS $$";
+const char title_item_setup_jas_auto[] PROGMEM = "JAS AT";
+
+const char title_item_set_select_prog[] PROGMEM = "PROG $";
+
 char led_display_text[8];
-
-
 
 
 Struct_RootHistory RootHistory;
 RootMenu rm;
+RootMenu term_max;
+RootMenu term_climate;
+RootMenu term_off;
+RootMenu term_prog;
+RootMenu term_man;
+RootMenu setup_menu;
+ItemMenu item_show_temp, item_show_time;
 
-_ItemFunction Term_Menu_Items[3];
+RootMenu setup_menu_jas;
+RootMenu setup_mqtt_status;
+RootMenu setup_select_prog;
 
-/*
-  RootMenu rm;
-  ItemMenu menu_show_temp;
-  ItemMenu menu_show_time;
-  ItemMenu menu_show_termstav;
+ItemMenu item_set_jas, item_mqtt_status, item_select_prog , item_zpet;
+ItemMenu item_set_jas_dyn, item_set_jas_auto;
+ItemMenu item_set_man_temp;
+ItemMenu item_set_select_prog;
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void show_direct(char *tmp)
+{
+  jednotky = tmp[5];
+  desitky = tmp[4];
+  stovky = tmp[3];
+  tisice = tmp[2];
+  destisice = tmp[1];
+  statisice = tmp[0];
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////
+void menu_history_init(RootMenu *rm)
+{
+  RootHistory.history[0] = rm;
+  RootHistory.menu_max = 0;
+}
+///////////////////////////////////////
+void menu_init(RootMenu *rm)
+{
+  for (uint8_t itm = 0; itm < MAX_ITEMS_ROOT_MENU; itm++) rm->Item[itm] = nullptr;
+  rm->items = 0;
+  rm->current_item = 0;
+  rm->args3 = 0;
+}
+////////////////////////////////////
+void menu_set_root_menu(RootMenu *rm)
+{
+  if (RootHistory.menu_max < MAX_HISTORY)
+  {
+    RootHistory.menu_max++;
+    RootHistory.history[RootHistory.menu_max] = rm;
+  }
+}
+//////////////////////////////////
+void menu_back_root_menu(void)
+{
+  if (RootHistory.menu_max > 0 ) RootHistory.menu_max--;
+}
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void menu_root_setname(RootMenu *rm, char *name)
+{
+  rm->name = name;
+}
+///////////////////////////////////////
+bool menu_root_additem(RootMenu *rm, ItemMenu *item)
+{
+  if (rm->items < MAX_ITEMS_ROOT_MENU)
+  {
+    for (uint8_t itm = 0; itm < MAX_ITEMS_ROOT_MENU; itm++)
+      if (rm->Item[itm] == nullptr)
+      {
+        rm->Item[itm] = item;
+        rm->items++;
+        return true;
+      }
+  }
+  else
+    return false;
+}
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+bool menu_root_deleteitem(RootMenu *rm, ItemMenu *item)
+{
+  if (rm->items > 0)
+  {
+    for (uint8_t itm = 0; itm < MAX_ITEMS_ROOT_MENU; itm++)
+      if (rm->Item[itm] == item)
+      {
+        rm->Item[itm] = nullptr;
+        rm->items--;
+        return true;
+      }
+  }
+  else
+    return false;
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void menu_item_set_properties(ItemMenu *item, char *name, uint8_t type, function on_show, uint8_t first = 0, uint8_t last = 0)
+{
+  item->name = name;
+  item->on_show = on_show;
+  item->type = type;
+  item->first = first;
+  item->last = last;
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void menu_display(void)
+{
+  static char tmp[8];
+  static char tmp2[5];
+  RootMenu _rm;
+  uint8_t t, r, i, p;
+  _rm = *RootHistory.history[RootHistory.menu_max];
 
-  RootMenu setup_menu;
+  if (_rm.items == 0)
+  {
+    strcpy_P(tmp, _rm.name);
+    show_direct(tmp);
+    goto endfce;
+  }
 
-  RootMenu term_man;
-  RootMenu term_max;
-  RootMenu term_climate;
-  RootMenu term_off;
-  RootMenu term_prog;
+  if (_rm.Item[_rm.current_item]->type == TYPE_FUNCTION)
+  {
+    _rm.Item[_rm.current_item]->on_show(0, 0);
+    goto endfce;
+  }
 
-  ItemMenu item_term_set_global;
+  if (_rm.Item[_rm.current_item]->type == TYPE_STATIC)
+  {
+    strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
+    show_direct(tmp);
+    goto endfce;
+  }
 
-  RootMenu setup_menu_jas;
-  RootMenu setup_menu_prog[MAX_THERMOSTAT];
+  if (_rm.Item[_rm.current_item]->type == TYPE_DYNAMIC)
+  {
+    if (_rm.Item[_rm.current_item]->on_show != nullptr)
+    {
+      _rm.Item[_rm.current_item]->on_show(_rm.args3, tmp2);
+    }
+    else
+    {
+      itoa(_rm.args3, tmp2, 10);
+    }
+    /// zastupny znak $
+    /// zastupny znak * je znak vcetne tecky
+    /// nahrazovany text
+    strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
+    /// text pro nahrazeni
+    r = strlen(tmp2);
+    t = 0;
+    p = 0;
+    tecka = 0;
+    for (i = 0; i < strlen(tmp); i++)
+      if (tmp[i] == '*')
+      {
+        tecka = tecka + (1 << (i));
+        p++;
+      }
+    for (i = 0; i < strlen(tmp); i++)
+      if ((tmp[i] == '$' || tmp[i] == '*')  && t < r)
+      {
+        tmp[i] = tmp2[t];
+        t++;
+      }
+    for (; i < 6; i++)
+    {
+      tmp[i] = 32; ///' '
+    }
+    show_direct(tmp);
+  }
+endfce:;
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void get_current_menu(char *text)
+{
+  strcpy_P(text, RootHistory.history[RootHistory.menu_max]->name);
+}
+
+void get_current_item(char *tmp)
+{
+  tmp[0] = 0;
+  RootMenu _rm;
+  _rm = *RootHistory.history[RootHistory.menu_max];
+  if (_rm.items > 0)
+    strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
+}
 
 
-  ItemMenu item_setup_jas, item_setup_prog, item_back;
-  ItemMenu item_setup_set_jas;
-  ItemMenu item_setup_set_prog;
-  /*
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void menu_next(void)
+{
+  RootMenu *_rm;
+  _rm = RootHistory.history[RootHistory.menu_max];
 
-*/
-/*
+  uint8_t type = _rm->Item[_rm->current_item]->type;
+  if (type == TYPE_STATIC || type == TYPE_FUNCTION)
+  {
+    if (_rm->current_item < _rm->items - 1)
+      _rm->current_item++;
+    else
+      _rm->current_item = 0;
+  }
+
+  if (type == TYPE_DYNAMIC)
+  {
+    if (_rm->args3 < _rm->Item[_rm->current_item]->last)
+    {
+      _rm->args3++;
+    }
+    else
+    {
+      _rm->args3 = _rm->Item[_rm->current_item]->first ;
+      if (_rm->current_item < _rm->items - 1)
+        _rm->current_item++;
+      else
+        _rm->current_item = 0;
+    }
+  }
+  RootHistory.history[RootHistory.menu_max] = _rm;
+}
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void menu_prev(void)
+{
+  RootMenu *_rm;
+  _rm = RootHistory.history[RootHistory.menu_max];
+
+  uint8_t type = _rm->Item[_rm->current_item]->type;
+  if (type == TYPE_STATIC || type == TYPE_FUNCTION)
+  {
+    if (_rm->current_item > 0)
+      _rm->current_item--;
+    else
+      _rm->current_item = _rm->items - 1;
+  }
+
+  if (type == TYPE_DYNAMIC)
+  {
+    if (_rm->args3 > _rm->Item[_rm->current_item]->first)
+    {
+      _rm->args3--;
+    }
+    else
+    {
+      _rm->args3 = _rm->Item[_rm->current_item]->last;
+      if (_rm->current_item > 0)
+        _rm->current_item--;
+      else
+        _rm->current_item = _rm->items - 1;
+    }
+  }
+  RootHistory.history[RootHistory.menu_max] = _rm;
+}
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
+void set_man_term_temp(uint8_t cnt, char *text)
+{
+  int tepl;
+  tepl = 160 + (cnt * 5);
+  itoa(tepl, text, 10);
+}
 
-  RootMenu setup_menu_rs_id;
+void set_select_active_prog(uint8_t cnt, char *text)
+{
 
+  itoa(cnt, text, 10);
 
-
-  RootMenu rm_error;
-
-  ItemMenu menu_show_time,   menu_show_termstav;
-  ItemMenu menu_show_temp;
-
-  ItemMenu item_term_prog;
-
-  ItemMenu menu_show_term_max;
-  ItemMenu menu_show_term_climate;
-  ItemMenu menu_show_term_off;
-
-
-
-
-
-
-  ItemMenu item_error;
-
-
-*/
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//// primitivni funkce
-void kalibrace_touchpad(void);
+void kalibrace_touchpad(void)
+{
+  uint8_t itmp = EEPROM.read(my_sense);
+  //analogWrite(SENSE, itmp);
+}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////
 uint8_t count_use_tds(void)
 {
@@ -580,235 +755,92 @@ endloop:;
   }
 }
 
-//saric
-///////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void menu_history_init(RootMenu *rm)
+void show_temp_default(void)
 {
-  RootHistory.history[0] = rm;
-  RootHistory.menu_max = 0;
-}
+  char c[4];
+  int tt;
+  char tmp[8];
+  uint8_t idx = 0;
+  tmp[0] = 0;
+  struct_DDS18s20 tds;
 
-///////////////////////////////////////
-void menu_init(RootMenu *rm, char *name, uint8_t type)
-{
-  rm->items = 0;
-  rm->current_item = 0;
-  rm->type = type;
-  rm->name = name;
-  rm->ItemFunction = nullptr;
-  rm->ItemStatic = nullptr;
-  rm->ItemDynamic = nullptr;
-}
-
-void menu_set_item_function(RootMenu *rm, _ItemFunction *IF, uint8_t len)
-{
-  rm->len = len;
-  rm->ItemFunction = IF;
-}
-
-void item_Function_add_function(_ItemFunction *IF, uint8_t idx, function fce, char *name)
-{
-  IF[idx].on_show = fce;
-  IF[idx].name = name;
-}
-
-////////////////////////////////////
-/*
-  void menu_set_root_menu(RootMenu *rm)
+  get_tds18s20(idx, &tds);
+  if ((tds.used == 1) && (status_tds18s20[idx].online == True))
   {
-  if (RootHistory.menu_max < MAX_HISTORY)
-  {
-    RootHistory.menu_max++;
-    RootHistory.history[RootHistory.menu_max] = rm;
-  }
-  }
-*/
-//////////////////////////////////
-/*
-  void menu_back_root_menu(void)
-  {
-  if (RootHistory.menu_max > 0 ) RootHistory.menu_max--;
-  }
-*/
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  void menu_root_setname(RootMenu *rm, char *name)
-  {
-  rm->name = name;
-  }
-
-  void menu_root_setidx(RootMenu *rm, uint8_t idx)
-  {
-  rm->idx = idx;
-  }
-*/
-///////////////////////////////////////
-/*
-  bool menu_root_additem(RootMenu *rm, ItemMenu *item)
-  {
-  if (rm->items < MAX_ITEMS_ROOT_MENU)
-  {
-    for (uint8_t itm = 0; itm < MAX_ITEMS_ROOT_MENU; itm++)
-      if (rm->Item[itm] == nullptr)
-      {
-        rm->Item[itm] = item;
-        rm->items++;
-        return true;
-      }
-  }
-  else
-    return false;
-  }
-*/
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  bool menu_root_deleteitem(RootMenu *rm, ItemMenu *item)
-  {
-  if (rm->items > 0)
-  {
-    for (uint8_t itm = 0; itm < MAX_ITEMS_ROOT_MENU; itm++)
-      if (rm->Item[itm] == item)
-      {
-        rm->Item[itm] = nullptr;
-        rm->items--;
-        return true;
-      }
-  }
-  else
-    return false;
-  }
-*/
-/*
-  ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  void menu_item_set_properties(ItemMenu *item, char *name, function on_show )
-  {
-  item->name = name;
-  item->on_show = on_show;
-  }
-*/
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void menu_display(void)
-{
-
-}
-
-/*
-  void menu_display(void)
-  {
-  static char tmp[8];
-  RootMenu _rm;
-  uint8_t t, te;
-  _rm = *RootHistory.history[RootHistory.menu_max];
-
-  if (_rm.items > 0)
-  {
-    if (_rm.Item[_rm.current_item]->on_show != nullptr)
+    tt = status_tds18s20[idx].temp;
+    if (tt < 0) tt = tt * -1;
+    itoa(tt / 100, c, 10);
+    if ((tt / 1000) > 10)
+      tecka = 0b00001000;
+    else
+      tecka = 0b00000100;
+    if (tt == 0)
     {
-      _rm.Item[_rm.current_item]->on_show();
+      c[0] = '0';
+      c[1] = '0';
     }
-
-    if (_rm.Item[_rm.current_item]->on_show == nullptr)
-    {
-      t = 0;
-      strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
-      if (_rm.idx != 255)
-        itoa(_rm.idx, led_display_text, 10);
-
-      for (uint8_t i = 0; i < strlen(tmp); i++)
-      {
-        if (tmp[i] == '$')
-        {
-          tmp[i] = led_display_text[t];
-          t++;
-        }
-      }
-      /// praso hack s teckou; nefunguje idealne
-      if (t == 0) tecka = 0;
-      show_default(tmp);
-    }
+    if (status_tds18s20[idx].temp >= 0)
+      strcpy(tmp, "t ");
+    if (status_tds18s20[idx].temp < 0)
+      strcpy(tmp, "t-");
+    strcat(tmp, c);
+    strcat(tmp, "C");
   }
   else
   {
-    strcpy_P(tmp, _rm.name);
-    show_default(tmp);
-    /////*
-      GLCD_Clear();
-      GLCD_GotoXY(0, 0);
-      GLCD_PrintString(tmp);
-      GLCD_flip();
-      GLCD_Render();
-    //////
+    strcpy(tmp, "t ERR ");
   }
-  }
-*/
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void get_current_menu(char *text)
-{
-  strcpy_P(text, RootHistory.history[RootHistory.menu_max]->name);
+
+  if (tmp[5] == 0) jednotky = ' ';
+  else jednotky = tmp[5];
+  if (tmp[4] == 0)  desitky = ' ';
+  else desitky = tmp[4];
+  stovky = tmp[3];
+  tisice = tmp[2];
+  destisice = tmp[1];
+  statisice = tmp[0];
 }
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-
-void get_current_item(char *tmp)
+void show_time(void)
 {
-  strcpy(tmp, "");
-  RootMenu _rm;
-  _rm = *RootHistory.history[RootHistory.menu_max];
-  /// ochrana pokud k menu neni pridana polozka, vracim prazdny napis polozky
-  //if (_rm.items > 0 ) strcpy_P(tmp, _rm.Item[_rm.current_item]->name);
-}
-
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-bool menu_next(void)
-{
-  bool ok;
-  RootMenu *_rm;
-  _rm = RootHistory.history[RootHistory.menu_max];
-
-  if (_rm->current_item < _rm->items - 1)
+  char c[4];
+  char tmp[8];
+  c[0] = 0;
+  tmp[0] = 0;
+  tecka = 0b00000000;
+  if ((now.hour() < 24) && (now.minute() < 60) && (now.second() < 60))
   {
-    _rm->current_item++;
-    ok = true;
-  }
-  else ok = false;
-
-  RootHistory.history[RootHistory.menu_max] = _rm;
-  return ok;
-}
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-bool menu_prev(void)
-{
-  bool ok;
-  RootMenu *_rm;
-  _rm = RootHistory.history[RootHistory.menu_max];
-
-  if (_rm->current_item > 0)
-  {
-    _rm->current_item--;
-    ok = true;
-  }
-  else ok = false;
-
-  RootHistory.history[RootHistory.menu_max] = _rm;
-  return ok;
-}
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void menu_rotate(void)
-{
-  RootMenu *_rm;
-  _rm = RootHistory.history[RootHistory.menu_max];
-
-  if (_rm->current_item < _rm->items - 1)
-  {
-    _rm->current_item++;
+    itoa(now.hour(), c, 10);
+    if (now.hour() < 10) strcat(tmp, "0");
+    strcat(tmp, c);
+    if ((now.second() % 2) == 0)
+      strcat(tmp, "'");
+    else
+      strcat(tmp, ",");
+    itoa(now.minute(), c, 10);
+    if (now.minute() < 10) strcat(tmp, "0");
+    strcat(tmp, c);
+    strcat(tmp, " ");
   }
   else
-    _rm->current_item = 0;
-
-  RootHistory.history[RootHistory.menu_max] = _rm;
+  {
+    strcpy(tmp, "ERR---");
+  }
+  jednotky = tmp[5];
+  desitky = tmp[4];
+  stovky = tmp[3];
+  tisice = tmp[2];
+  destisice = tmp[1];
+  statisice = tmp[0];
 }
-//////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -908,6 +940,7 @@ void load_setup_network(void)
   device.mqtt_port = EEPROM.read(device_mqtt_port) << 8 + EEPROM.read(device_mqtt_port + 1);
   for (uint8_t m = 0; m < 20; m++) device.mqtt_user[m] = EEPROM.read(device_mqtt_user + m);
   for (uint8_t m = 0; m < 20; m++) device.mqtt_key[m] = EEPROM.read(device_mqtt_key + m);
+  for (uint8_t m = 0; m < 4; m++) device.ntp_server[m] = EEPROM.read(device_ntp_server + m);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -925,6 +958,7 @@ void save_setup_network(void)
   EEPROM.write(device_mqtt_port + 1, device.mqtt_port & 0xff);
   for (uint8_t m = 0; m < 20; m++) EEPROM.write(device_mqtt_user + m, device.mqtt_user[m]);
   for (uint8_t m = 0; m < 20; m++) EEPROM.write(device_mqtt_key + m, device.mqtt_key[m]);
+  for (uint8_t m = 0; m < 4; m++) EEPROM.write(device_ntp_server + m, device.ntp_server[m]);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -993,18 +1027,20 @@ void thermostat_set_status(uint8_t idx, uint8_t stav)
 
 ////////////////////////////////////////////////////////////////////////////////////////
 ///////// globalni termostat mode
-uint8_t thermostat_get_mode(void)
-{
+/*
+  uint8_t thermostat_get_mode(void)
+  {
   term_mode = EEPROM.read(eeprom_term_mode);
   return term_mode;
-}
+  }
 
-void thermostat_set_mode(uint8_t in)
-{
+  void thermostat_set_mode(uint8_t in)
+  {
   term_mode = in;
   EEPROM.write(eeprom_term_mode, term_mode);
-}
-/*
+  }
+  /*
+  /*
   //////// seznam vsech dostupnych programu
   void thermostat_get_availability_program(void)
   {
@@ -1018,6 +1054,7 @@ void thermostat_set_mode(uint8_t in)
   EEPROM.write(dostupny_program3, (max_program >> 24) & 0xff);
   }
 */
+
 //// nastaveni programu k ringu termostatu
 uint8_t thermostat_get_program_id(uint8_t idx)
 {
@@ -1062,20 +1099,40 @@ void thermostat_set_ring_mode(uint8_t idx, uint8_t id)
 ///////////////////////////////////////////////////////////////
 void send_mqtt_message_prefix_id_topic_payload(char *prefix, uint8_t id, char *topic, char *payload)
 {
+
   char str_topic[64];
   char hostname[10];
   char tmp1[12];
-  device_get_name(hostname);
-  strcpy_P(str_topic, mqtt_header_out);
-  strcat(str_topic, hostname);
-  strcat(str_topic, "/");
-  strcat(str_topic, prefix);
-  strcat(str_topic, "/");
-  itoa(id, tmp1, 10);
-  strcat(str_topic, tmp1);
-  strcat(str_topic, "/");
-  strcat(str_topic, topic);
-  mqtt_client.publish(str_topic, payload);
+  if (mqtt_client.connected())
+  {
+    device_get_name(hostname);
+    strcpy_P(str_topic, mqtt_header_out);
+    strcat(str_topic, hostname);
+    strcat(str_topic, "/");
+    strcat(str_topic, prefix);
+    strcat(str_topic, "/");
+    itoa(id, tmp1, 10);
+    strcat(str_topic, tmp1);
+    strcat(str_topic, "/");
+    strcat(str_topic, topic);
+    mqtt_client.publish(str_topic, payload);
+  }
+}
+
+void send_mqtt_general_payload(char *topic, char *payload)
+{
+  char str_topic[64];
+  char hostname[10];
+  char tmp1[12];
+  if (mqtt_client.connected())
+  {
+    device_get_name(hostname);
+    strcpy_P(str_topic, mqtt_header_out);
+    strcat(str_topic, hostname);
+    strcat(str_topic, "/");
+    strcat(str_topic, topic);
+    mqtt_client.publish(str_topic, payload);
+  }
 }
 /////////////////////////////////////////////
 //// /thermctl_out/XXXXX/1wire/count
@@ -1086,34 +1143,37 @@ void send_mqtt_onewire(void)
   char hostname[10];
   char payload[64];
   char tmp1[4];
-  device_get_name(hostname);
-  itoa(Global_HWwirenum, payload, 10);
-  strcpy_P(str_topic, mqtt_header_out);
-  strcat(str_topic, hostname);
-  strcat(str_topic, "/1wire/count");
-  mqtt_client.publish(str_topic, payload);
-  for (uint8_t i = 0; i < Global_HWwirenum; i++)
+  if (mqtt_client.connected())
   {
+    device_get_name(hostname);
+    itoa(Global_HWwirenum, payload, 10);
     strcpy_P(str_topic, mqtt_header_out);
     strcat(str_topic, hostname);
-    strcat(str_topic, "/1wire/");
-    itoa(i, tmp1, 10);
-    strcat(str_topic, tmp1);
-    strcat(str_topic, "/rom");
-
-    payload[0] = 0;
-    for (uint8_t a = 0; a < 8; a++ )
-    {
-      itoa(w_rom[i].rom[a], tmp1, 16);
-      strcat(payload, tmp1);
-      if (a < 7)
-      {
-        tmp1[0] = ':';
-        tmp1[1] = 0;
-        strcat(payload, tmp1);
-      }
-    }
+    strcat(str_topic, "/1wire/count");
     mqtt_client.publish(str_topic, payload);
+    for (uint8_t i = 0; i < Global_HWwirenum; i++)
+    {
+      strcpy_P(str_topic, mqtt_header_out);
+      strcat(str_topic, hostname);
+      strcat(str_topic, "/1wire/");
+      itoa(i, tmp1, 10);
+      strcat(str_topic, tmp1);
+      strcat(str_topic, "/rom");
+
+      payload[0] = 0;
+      for (uint8_t a = 0; a < 8; a++ )
+      {
+        itoa(w_rom[i].rom[a], tmp1, 16);
+        strcat(payload, tmp1);
+        if (a < 7)
+        {
+          tmp1[0] = ':';
+          tmp1[1] = 0;
+          strcat(payload, tmp1);
+        }
+      }
+      mqtt_client.publish(str_topic, payload);
+    }
   }
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1121,15 +1181,13 @@ void send_mqtt_onewire(void)
 //// /thermctl-out/XXXXX/tds/ID/name
 //// /thermctl-out/XXXXX/tds/offset
 //// /thermctl-out/XXXXX/tds/online
+//// /thermctl-out/XXXXX/tds/rom
 void send_mqtt_tds(void)
 {
   struct_DDS18s20 tds;
-  //char str_topic[64];
-  //char hostname[10];
   char payload[64];
-  //char tmp1[5];
+  char tmp1[4];
   int tt;
-  //device_get_name(hostname);
   for (uint8_t id = 0; id < HW_ONEWIRE_MAXROMS; id++)
     if (get_tds18s20(id, &tds) == 1)
       if (tds.used == 1) if (status_tds18s20[id].online == True)
@@ -1137,50 +1195,31 @@ void send_mqtt_tds(void)
           tt = status_tds18s20[id].temp / 10;
           itoa(tt, payload, 10);
           send_mqtt_message_prefix_id_topic_payload("tds", id, "temp", payload);
-          /*
-            strcpy_P(str_topic, mqtt_header_out);
-            strcat(str_topic, hostname);
-            strcat(str_topic, "/tds/");
-            itoa(id, tmp1, 10);
-            strcat(str_topic, tmp1);
-            strcat(str_topic, "/temp");
-            mqtt_client.publish(str_topic, payload);
-          */
+
           strcpy(payload, tds.name);
           send_mqtt_message_prefix_id_topic_payload("tds", id, "name", payload);
-          /*
-            strcpy_P(str_topic, mqtt_header_out);
-            strcat(str_topic, hostname);
-            strcat(str_topic, "/tds/");
-            itoa(id, tmp1, 10);
-            strcat(str_topic, tmp1);
-            strcat(str_topic, "/name");
-            mqtt_client.publish(str_topic, payload);
-          */
+
           tt = tds.offset;
           itoa(tt, payload, 10);
           send_mqtt_message_prefix_id_topic_payload("tds", id, "offset", payload);
-          /*
-            strcpy_P(str_topic, mqtt_header_out);
-            strcat(str_topic, hostname);
-            strcat(str_topic, "/tds/");
-            itoa(id, tmp1, 10);
-            strcat(str_topic, tmp1);
-            strcat(str_topic, "/offset");
-            mqtt_client.publish(str_topic, payload);
-          */
+
           tt = status_tds18s20[id].online;
           itoa(tt, payload, 10);
           send_mqtt_message_prefix_id_topic_payload("tds", id, "online", payload);
-          /*
-            strcpy_P(str_topic, mqtt_header_out);
-            strcat(str_topic, hostname);
-            strcat(str_topic, "/tds/");
-            itoa(id, tmp1, 10);
-            strcat(str_topic, tmp1);
-            strcat(str_topic, "/online");
-            mqtt_client.publish(str_topic, payload);
-          */
+
+          payload[0] = 0;
+          for (uint8_t a = 0; a < 8; a++ )
+          {
+            itoa(tds.rom[a], tmp1, 16);
+            strcat(payload, tmp1);
+            if (a < 7)
+            {
+              tmp1[0] = ':';
+              tmp1[1] = 0;
+              strcat(payload, tmp1);
+            }
+          }
+          send_mqtt_message_prefix_id_topic_payload("tds", id, "rom", payload);
         }
 }
 //////////////////////////////////////////////////
@@ -1206,99 +1245,57 @@ void send_mqtt_ring(void)
     {
       thermostat_get_name(idx, payload);
       send_mqtt_message_prefix_id_topic_payload("ring", idx, "name", payload);
-      /*
-        strcpy(payload, tmp1);
-        strcpy_P(str_topic, mqtt_header_out);
-        strcat(str_topic, hostname);
-        strcat(str_topic, "/ring/");
-        itoa(idx, tmp1, 10);
-        strcat(str_topic, tmp1);
-        strcat(str_topic, "/name");
-        mqtt_client.publish(str_topic, payload);
-      */
-      /*
-        strcpy_P(str_topic, mqtt_header_out);
-        strcat(str_topic, hostname);
-        strcat(str_topic, "/ring/");
-        itoa(idx, tmp1, 10);
-        strcat(str_topic, tmp1);
-        strcat(str_topic, "/ready");
-      */
+
       itoa(thermostat_get_ready(idx), payload, 10);
       send_mqtt_message_prefix_id_topic_payload("ring", idx, "ready", payload);
-      //mqtt_client.publish(str_topic, payload);
 
-      /*
-        strcpy_P(str_topic, mqtt_header_out);
-        strcat(str_topic, hostname);
-        strcat(str_topic, "/ring/");
-        itoa(idx, tmp1, 10);
-        strcat(str_topic, tmp1);
-        strcat(str_topic, "/program");
-      */
       itoa(thermostat_get_program_id(idx), payload, 10);
-      send_mqtt_message_prefix_id_topic_payload("ring", idx, "ready", payload);
-      //mqtt_client.publish(str_topic, payload);
+      send_mqtt_message_prefix_id_topic_payload("ring", idx, "program", payload);
 
-      /*
-        strcpy_P(str_topic, mqtt_header_out);
-        strcat(str_topic, hostname);
-        strcat(str_topic, "/ring/");
-        itoa(idx, tmp1, 10);
-        strcat(str_topic, tmp1);
-        strcat(str_topic, "/threshold");
-      */
       itoa(thermostat_get_mezni(idx), payload, 10);
       send_mqtt_message_prefix_id_topic_payload("ring", idx, "threshold", payload);
-      //mqtt_client.publish(str_topic, payload);
 
-      /*
-        strcpy_P(str_topic, mqtt_header_out);
-        strcat(str_topic, hostname);
-        strcat(str_topic, "/ring/");
-        itoa(idx, tmp1, 10);
-        strcat(str_topic, tmp1);
-        strcat(str_topic, "/mode");
-      */
       itoa(thermostat_get_ring_mode(idx), payload, 10);
       send_mqtt_message_prefix_id_topic_payload("ring", idx, "mode", payload);
-      //mqtt_client.publish(str_topic, payload);
-      /*
-        strcpy_P(str_topic, mqtt_header_out);
-        strcat(str_topic, hostname);
-        strcat(str_topic, "/ring/");
-        itoa(idx, tmp1, 10);
-        strcat(str_topic, tmp1);
-        strcat(str_topic, "/status");
-      */
+
+      convert_mode_text(thermostat_get_ring_mode(idx), payload);
+      send_mqtt_message_prefix_id_topic_payload("ring", idx, "text_mode", payload);
+
       itoa(thermostat_get_status(idx), payload, 10);
       send_mqtt_message_prefix_id_topic_payload("ring", idx, "status", payload);
-      //mqtt_client.publish(str_topic, payload);
-      /*
-        strcpy_P(str_topic, mqtt_header_out);
-        strcat(str_topic, hostname);
-        strcat(str_topic, "/ring/");
-        itoa(idx, tmp1, 10);
-        strcat(str_topic, tmp1);
-        strcat(str_topic, "/tds");
-      */
+
       itoa(thermostat_get_asociate_tds(idx), payload, 10);
       send_mqtt_message_prefix_id_topic_payload("ring", idx, "tds", payload);
-      //mqtt_client.publish(str_topic, payload);
-      /*
-        strcpy_P(str_topic, mqtt_header_out);
-        strcat(str_topic, hostname);
-        strcat(str_topic, "/ring/");
-        itoa(idx, tmp1, 10);
-        strcat(str_topic, tmp1);
-        strcat(str_topic, "/output");
-      */
+
       itoa(thermostat_get_output(idx), payload, 10);
       send_mqtt_message_prefix_id_topic_payload("ring", idx, "output", payload);
-      //mqtt_client.publish(str_topic, payload);
     }
 }
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+uint8_t convert_text_mode(char *str2)
+{
+  uint8_t mode = 0;
+  if (strcmp(str2, "off") == 0) mode = TERM_MODE_OFF;
+  if (strcmp(str2, "heat") == 0) mode = TERM_MODE_MAX;
+  if (strcmp(str2, "manual") == 0) mode = TERM_MODE_MAN;
+  if (strcmp(str2, "auto") == 0) mode = TERM_MODE_PROG;
+  if (strcmp(str2, "cool") == 0) mode = TERM_MODE_CLIMATE;
+  //if (strcmp(str2, "fan_only") == 0) mode = TERM_MODE_CLIMATE;
+
+  return mode;
+}
+
+void convert_mode_text(uint8_t mode, char *str)
+{
+  if (mode == TERM_MODE_OFF)   strcpy(str, "off");
+  if (mode == TERM_MODE_MAX)   strcpy(str, "heat");
+  if (mode == TERM_MODE_MAN)   strcpy(str, "manual");
+  if (mode == TERM_MODE_PROG)   strcpy(str, "auto");
+  if (mode == TERM_MODE_CLIMATE)   strcpy(str, "cool");
+  //if (mode == TERM_MODE_FAN)   strcpy(str, "fan_only");
+}
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void mqtt_callback(char* topic, byte* payload, unsigned int length)
 {
@@ -1310,10 +1307,6 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   struct_DDS18s20 tds;
   char *pch;
   for (uint8_t j = 0; j < 128; j++) str2[j] = 0;
-  GLCD_Clear();
-  GLCD_GotoXY(0, 0);
-
-
 
   //// /thermctl-in/global/time/set - nastaveni casu. payload json
   strcpy_P(str1, mqtt_header_in);
@@ -1331,13 +1324,14 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   strcat_P(str1, global_time_ntp);
   if (strcmp(str1, topic) == 0)
   {
-    // rtc.adjust(DateTime(root["year"], root["month"], root["day"], root["hour"], root["minute"], root["second"]));
+    timeClient.begin();
+    timeClient.update();
+    timeClient.end();
+    rtc.adjust(DateTime(timeClient.getYear(), timeClient.getMonth() , timeClient.getDate(), timeClient.getHours(), timeClient.getMinutes(), timeClient.getSeconds()));
   }
 
-  //// /thermctl/XXXX/tds/list - vycte seznam vsech tds cidel
   //// /thermctl/global/ping - test spojeni
 
-  //// /thermctl/XXXX/1wire/list - vycte seznam vsech nalezenych 1wire zarizeni
 
   //// /thermctl-in/XXXX/tds/associate - asociace do tds si pridam mac 1wire - odpoved je pod jakem ID to mam ulozeno
   strcpy_P(str1, mqtt_header_in);
@@ -1396,6 +1390,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   //// thermctl-in/XXXXX/ring/set/IDcko/name
   //// thermctl-in/XXXXX/ring/set/IDcko/program
   //// thermctl-in/XXXXX/ring/set/IDcko/threshold
+  //// thermctl-in/XXXXX/ring/set/IDcko/text_mode
   //// thermctl-in/XXXXX/ring/set/IDcko/mode
   //// thermctl-in/XXXXX/ring/set/IDcko/tds
   //// thermctl-in/XXXXX/ring/set/IDcko/ready
@@ -1420,7 +1415,9 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       if (cnt == 0) id = atoi(pch);
       if ((cnt == 1) && (strcmp(pch, "name") == 0)) thermostat_set_name(id, str2);
       if ((cnt == 1) && (strcmp(pch, "program") == 0)) thermostat_set_program_id(id, atoi(str2));
+      if ((cnt == 1) && (strcmp(pch, "threshold-f") == 0)) thermostat_set_mezni(id, atof(str2) * 10); /// thereshold hodnota presne ve floatu * 10
       if ((cnt == 1) && (strcmp(pch, "threshold") == 0)) thermostat_set_mezni(id, atoi(str2));
+      if ((cnt == 1) && (strcmp(pch, "text_mode") == 0)) thermostat_set_ring_mode(id, convert_text_mode(str2));
       if ((cnt == 1) && (strcmp(pch, "mode") == 0)) thermostat_set_ring_mode(id, atoi(str2));
       if ((cnt == 1) && (strcmp(pch, "tds") == 0)) thermostat_set_asociate_tds(id, atoi(str2));
       if ((cnt == 1) && (strcmp(pch, "ready") == 0)) thermostat_set_ready(id, atoi(str2));
@@ -1440,595 +1437,67 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
     EEPROM.write(set_default_values, 255);
   }
 
-
-  GLCD_flip();
-  GLCD_Render();
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////
 void send_mqtt_status(void)
 {
-  char str_topic[64];
-  char hostname[10];
-  char payload[64];
-  strcpy_P(str_topic, mqtt_header_out);
-  strcat(str_topic, device.nazev);
-  strcat(str_topic, "/status/uptime");
-  itoa(uptime, payload, 10);
-  mqtt_client.publish(str_topic, payload);
+  if (mqtt_client.connected())
+  {
+    char str_topic[64];
+    char hostname[10];
+    char payload[64];
+    strcpy_P(str_topic, mqtt_header_out);
+    strcat(str_topic, device.nazev);
+    strcat(str_topic, "/status/uptime");
+    itoa(uptime, payload, 10);
+    mqtt_client.publish(str_topic, payload);
 
 
-  strcpy_P(str_topic, mqtt_header_out);
-  strcat(str_topic, device.nazev);
-  strcat(str_topic, "/status/brigthness");
-  itoa(aktual_light, payload, 10);
-  mqtt_client.publish(str_topic, payload);
+    strcpy_P(str_topic, mqtt_header_out);
+    strcat(str_topic, device.nazev);
+    strcat(str_topic, "/status/brigthness");
+    itoa(aktual_light, payload, 10);
+    mqtt_client.publish(str_topic, payload);
+  }
 }
 ///////////////////////////
-void mqtt_reconnect(void)
+void mqtt_publis_output(uint8_t idx, uint8_t state)
+{
+  char str_topic[64];
+  char payload[64];
+  char str1[8];
+  strcpy_P(str_topic, mqtt_header_out);
+  strcat(str_topic, "power-output/");
+  itoa(idx, str1, 10);
+  strcat(str_topic, str1);
+  strcat(str_topic, "/state");
+  itoa(state, payload, 10);
+  mqtt_client.publish(str_topic, payload);
+  
+}
+//////////////////////////////////////////////////////
+boolean mqtt_reconnect(void)
 {
   char nazev[10];
-  char topic[26]; ///  /thermctl/xxxxxxxx/#
+  char topic[26];
+  boolean ret;
+  ///  /thermctl/xxxxxxxx/#
   ///  /thermctl/global/#
   device_get_name(nazev);
-  mqtt_client.connect(nazev);
+  ret = mqtt_client.connect(nazev);
   strcpy_P(topic, mqtt_header_in);
   strcat(topic, nazev);
   strcat(topic, "/#");
-  mqtt_client.subscribe(topic);
+  ret = ret && mqtt_client.subscribe(topic);
   strcpy_P(topic, mqtt_header_in);
   strcat(topic, "global/#");
-  mqtt_client.subscribe(topic);
+  ret = ret && mqtt_client.subscribe(topic);
+  return ret;
 }
 ////////////////////////////////////////////////////////
 
-void glcd_init_header(void)
-{
-  GLCD_SetFont(Font5x8, 5, 8, GLCD_Overwrite);
-  GLCD_Clear();
-  GLCD_GotoXY(0, 0);
-  GLCD_PrintString("Pokojovy termostat");
-  GLCD_GotoXY(0, 16);
-  GLCD_PrintString("inicializace");
-}
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void setup(void) {
-  char tmp1[20];
-  char tmp2[20];
-  uint8_t itmp;
-
-
-  struct_DDS18s20 tds;
-  // put your setup code here, to run once:
-  // komunikace přes sériovou linku rychlostí 19200
-  //Serial.begin(38400);
-
-
-
-
-  //RF24 nRF(NRF_CE, NRF_CS);
-  //nRF.begin();
-  //nRF.setPALevel(RF24_PA_LOW);
-  //nRF.startListening();
-
-
-  pinMode(ETH_RST, OUTPUT);
-  digitalWrite(ETH_RST, LOW);
-  for (uint16_t i = 0; i < 4024; i++);
-  digitalWrite(ETH_RST, HIGH);
-
-
-  statisice = '-';
-  destisice = '-';
-  tisice = '-';
-  stovky = '-';
-  desitky = '-';
-  jednotky = '-';
-  display_pos = 0;
-
-  menu_history_init(&rm);
-  menu_init(&rm, title_root_termostat, 0);
-
-  //////item_Function_add_function(_ItemFunction *IF, uint8_t idx, function fce, char *name)
-  item_Function_add_function(Term_Menu_Items, 0, show_temp_default, title_item_temp);
-  item_Function_add_function(Term_Menu_Items, 1, show_time, title_item_time);
-  item_Function_add_function(Term_Menu_Items, 2, show_termstav, title_item_termstav);
-
-  menu_set_item_function(&rm, Term_Menu_Items, 3);
-
-  /*
-      menu_item_set_properties(&menu_show_temp, title_item_menu_temp, show_temp_default);
-      menu_item_set_properties(&menu_show_time, title_item_menu_time, show_time);
-      menu_item_set_properties(&menu_show_termstav, title_item_menu_termstav, show_termstav);
-
-      menu_root_additem(&rm, &menu_show_time);
-      menu_root_additem(&rm, &menu_show_temp);
-      menu_root_additem(&rm, &menu_show_termstav);
-
-      menu_init(&setup_menu);
-      menu_root_setname(&setup_menu, title_root_setup_menu);
-
-      menu_init(&term_man);
-      menu_init(&term_max);
-      menu_init(&term_off);
-      menu_init(&term_prog);
-      menu_init(&term_climate);
-
-      menu_root_setname(&term_man, title_root_termman);
-      menu_root_setname(&term_prog, title_root_termprog);
-      menu_root_setname(&term_max, title_root_termmax);
-      menu_root_setname(&term_climate, title_root_termclimate);
-      menu_root_setname(&term_off, title_root_termoff);
-
-
-      menu_item_set_properties(&item_term_set_global, title_item_menu_termset, show_term_set_global);
-      menu_root_additem(&term_man, &item_term_set_global);
-
-      menu_init(&setup_menu_jas);
-      menu_root_setname(&setup_menu_jas, title_item_menu_setup_jas);
-
-      for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
-      {
-        menu_init(&setup_menu_prog[idx]);
-        menu_root_setname(&setup_menu_prog[idx], title_item_menu_setup_prog);
-        menu_root_setidx(&setup_menu_prog[idx], idx);
-      }
-      //menu_init(&rm_error);
-      menu_item_set_properties(&item_setup_jas, title_item_menu_setup_jas , nullptr);
-      menu_item_set_properties(&item_setup_prog, title_item_menu_setup_prog , nullptr);
-      menu_item_set_properties(&item_back, title_item_menu_back, back);
-
-      menu_root_additem(&setup_menu, &item_setup_jas);
-
-      for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++) menu_root_additem(&setup_menu, &item_setup_prog);
-      menu_root_additem(&setup_menu, &item_back);
-
-      menu_item_set_properties(&item_setup_set_jas, title_item_setup_jas, nullptr);
-      menu_root_additem(&setup_menu_jas, &item_setup_set_jas);
-
-      menu_item_set_properties(&item_setup_set_prog, title_item_setup_prog, nullptr);
-      for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++) menu_root_additem(&setup_menu_prog[idx], &item_setup_set_prog);
-      /*
-  */
-  /*
-
-
-
-
-    menu_init(&setup_menu_rs_id);
-
-
-    ;
-
-    menu_root_setname(&setup_menu_rs_id, title_item_menu_setup_bus);
-
-
-    menu_root_setname(&rm_error, title_error);
-
-    menu_item_set_properties(&item_term_prog, title_root_termprog, show_term_prog);
-
-    menu_item_set_properties(&menu_show_termstav, title_item_menu_termstav, show_termstav);
-
-    menu_item_set_properties(&menu_show_term_max, title_root_termmax, show_term_max);
-    menu_item_set_properties(&menu_show_term_climate, title_root_climate, show_term_climate);
-    menu_item_set_properties(&menu_show_term_off, title_root_termoff, show_term_off);
-
-
-
-    menu_item_set_properties(&menu_setup_bus, title_item_menu_setup_bus, nullptr);
-
-
-
-    //menu_item_set_properties(&menu_setup_rs_id, title_item_setup_rs_id, nullptr);
-
-
-
-
-    menu_item_set_properties(&item_error, title_error, f_error);
-
-
-    menu_root_additem(&term_fast_set, &menu_show_term_set_global);
-
-
-
-    menu_root_additem(&term_max, &menu_show_term_max);
-    menu_root_additem(&term_off, &menu_show_term_off);
-    menu_root_additem(&term_climate, &menu_show_term_climate);
-
-
-    menu_root_additem(&setup_menu, &menu_setup_bus);
-
-
-
-    menu_root_additem(&setup_menu_rs_id, &menu_setup_rs_id);
-
-
-    menu_root_additem(&rm_error, &item_error);
-  */
-
-  ds2482_address[0].i2c_addr = 0b0011000;
-  ds2482_address[0].HWwirenum = 0;
-  ds2482_address[0].hwwire_cekam = false;
-
-  noInterrupts();           // disable all interrupts
-  //pinMode(ETH_INT, INPUT_PULLUP);
-
-
-  pinMode(LED, OUTPUT);
-
-  pinMode(tr1, OUTPUT);
-  pinMode(tr2, OUTPUT);
-  pinMode(tr3, OUTPUT);
-  pinMode(tr4, OUTPUT);
-  pinMode(tr5, OUTPUT);
-  pinMode(tr6, OUTPUT);
-
-  pinMode(rs485, OUTPUT);
-  pinMode(PWM_DISP, OUTPUT);
-  pinMode(PWM_KEY, OUTPUT);
-  pinMode(DP, OUTPUT);
-
-  pinMode(SER1, OUTPUT);
-  pinMode(SER2, OUTPUT);
-  pinMode(SCLK, OUTPUT);
-  pinMode(PCLK, OUTPUT);
-
-  digitalWrite(tr1, 1);
-  digitalWrite(tr2, 1);
-  digitalWrite(tr3, 1);
-  digitalWrite(tr4, 1);
-  digitalWrite(tr5, 1);
-  digitalWrite(tr6, 1);
-  digitalWrite(DP, 1);
-
-  //digitalWrite(rs485, LOW);
-
-
-  TCCR3A = 0;
-  TCCR3B  = (1 << CS31);
-  timer3_counter = 61100;/// cca 450Hz
-  TCNT3 = timer3_counter;
-  TIMSK3 |= (1 << TOIE3);
-
-
-
-  //TCCR0B = TCCR0B & 0b11111000 | 0x02;
-  //TCCR1B = TCCR1B & 0b11111000 | 0x02;
-
-  interrupts();             // enable all interrupts
-
-  rtc.begin();
-
-
-  GLCD_Setup();
-  glcd_init_header();
-  GLCD_flip();
-  GLCD_Render();
-  delay(100);
-
-
-  for (uint8_t inic = 0; inic < 12; inic++)
-  {
-    if (inic == 0)
-    {
-      if (EEPROM.read(set_default_values) == 255)
-      {
-        glcd_init_header();
-        GLCD_GotoXY(0, 30);
-        GLCD_PrintString("... reset hodnot");
-
-        EEPROM.write(set_default_values, 0);
-        EEPROM.write(my_jas_disp, 240);
-        EEPROM.write(my_jas_key, 240);
-        EEPROM.write(my_rs_id, 31);
-        max_program = 0;
-        //thermostat_set_availability_program();
-        thermostat_set_mode(0);
-        EEPROM.write(my_sense, 127);
-        for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
-        {
-          thermostat_set_asociate_tds(idx, 255);
-          thermostat_set_mezni(idx, 220);
-          thermostat_set_program_id(idx, 0);
-          thermostat_set_status(idx, 0);
-          thermostat_set_ready(idx, 0);
-          thermostat_set_output(idx, 255);
-          thermostat_set_asociate_tds(idx, 255);
-          thermostat_set_ring_mode(idx, 255);
-          thermostat_set_name(idx, "FREE");
-        }
-        for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXDEVICES; idx++)
-        {
-          get_tds18s20(idx, &tds);
-          strcpy(tds.name, "FREE");
-          tds.used = 0;
-          tds.offset = 0;
-          tds.assigned_ds2482 = 0;
-          set_tds18s20(idx, &tds);
-        }
-        rtc.adjust(DateTime(2018, 12, 14, 17, 14, 0));
-        device.mac[0] = 2; device.mac[1] = 1; device.mac[2] = 2; device.mac[3] = 3; device.mac[4] = 4; device.mac[5] = 5;
-        device.myIP[0] = 192; device.myIP[1] = 168; device.myIP[2] = 2; device.myIP[3] = 111;
-        device.myMASK[0] = 255; device.myMASK[1] = 255; device.myMASK[2] = 255; device.myMASK[3] = 0;
-        device.myGW[0] = 192; device.myGW[1] = 168; device.myGW[2] = 2; device.myGW[3] = 1;
-        device.myDNS[0] = 192; device.myDNS[1] = 168; device.myDNS[2] = 2; device.myDNS[3] = 1;
-        device.mqtt_server[0] = 192; device.mqtt_server[1] = 168; device.mqtt_server[2] = 2; device.mqtt_server[3] = 1;
-        device.mqtt_port = 1883;
-        strcpy(device.mqtt_user, "saric");
-        strcpy(device.mqtt_key, "no");
-        save_setup_network();
-        device_set_name("TERM E1");
-        char hostname[10];
-        device_get_name(hostname);
-        GLCD_GotoXY(0, 45);
-        GLCD_PrintString("host:");
-        GLCD_GotoXY(30, 45);
-        GLCD_PrintString(hostname);
-
-        GLCD_flip();
-        GLCD_Render();
-        delay(2000);
-      }
-    }
-
-    if (inic == 1)
-    {
-      glcd_init_header();
-      GLCD_GotoXY(0, 30);
-      GLCD_PrintString("... sitove volby");
-      GLCD_flip();
-      GLCD_Render();
-      load_setup_network();
-    }
-
-    if (inic == 2)
-    {
-      glcd_init_header();
-      GLCD_GotoXY(0, 30);
-      GLCD_PrintString("... ostatni volby");
-      GLCD_flip();
-      GLCD_Render();
-      jas_disp = EEPROM.read(my_jas_disp);
-      jas_key = EEPROM.read(my_jas_key);
-      rsid = EEPROM.read(my_rs_id);
-      analogWrite(PWM_DISP, jas_disp);
-      analogWrite(PWM_KEY, jas_key);
-      //thermostat_get_availability_program();
-      thermostat_get_mode();
-    }
-
-
-    if (inic == 3)
-    {
-      glcd_init_header();
-      GLCD_GotoXY(0, 30);
-      GLCD_PrintString("... init 1w rozhrani");
-
-      itoa(ds2482_address[0].i2c_addr, tmp1, 10);
-      if (ds2482reset(ds2482_address[0].i2c_addr) == DS2482_ERR_OK)
-      {
-        strcpy(tmp2, "ds2482:");
-        strcat(tmp2, tmp1);
-        strcat(tmp2, "=OK");
-        GLCD_GotoXY(0, 40);
-        GLCD_PrintString(tmp2);
-      }
-      else
-      {
-        strcpy(tmp2, "ds2482:");
-        strcat(tmp2, tmp1);
-        strcat(tmp2, "=ERR");
-        GLCD_GotoXY(0, 40);
-        GLCD_PrintString(tmp2);
-      }
-      Global_HWwirenum = 0;
-      one_hw_search_device(0);
-      strcpy(tmp2, "found 1wire:");
-      itoa(Global_HWwirenum, tmp1, 10);
-      strcat(tmp2, tmp1);
-      if (Global_HWwirenum == 0) strcat(tmp2, "!!!");
-      GLCD_GotoXY(0, 52);
-      GLCD_PrintString(tmp2);
-      GLCD_flip();
-      GLCD_Render();
-    }
-
-    if (inic == 4)
-    {
-      glcd_init_header();
-      GLCD_GotoXY(0, 30);
-      GLCD_PrintString("... init klavesnice");
-      GLCD_flip();
-      GLCD_Render();
-      init_mpc();
-      write_to_mcp(255);
-      for (uint8_t i = 0; i < 8; i++)
-      {
-        write_to_mcp(~(1 << i));
-        tecka = (1 << i);
-        delay(50);
-      }
-      for (uint8_t i = 0; i < 8; i++)
-      {
-        write_to_mcp(~(1 << (7 - i)));
-        tecka = (1 << (7 - i));
-        delay(50);
-      }
-      tecka = 0;
-      write_to_mcp(255);
-    }
-
-    if (inic == 5)
-    {
-      glcd_init_header();
-      GLCD_GotoXY(0, 30);
-      GLCD_PrintString("... kalibrace klavesnice");
-      GLCD_flip();
-      GLCD_Render();
-      kalibrace_touchpad();
-    }
-
-    if (inic == 6)
-    {
-      if (!rtc.isrunning())
-      {
-        glcd_init_header();
-        GLCD_GotoXY(0, 30);
-        GLCD_PrintString("... init RTC");
-        GLCD_GotoXY(0, 42);
-        GLCD_PrintString("... chyba!!!");
-        GLCD_flip();
-        GLCD_Render();
-      }
-      else
-      {
-        glcd_init_header();
-        GLCD_GotoXY(0, 30);
-        GLCD_PrintString("... init RTC");
-        GLCD_GotoXY(0, 42);
-        GLCD_PrintString("... OK ...");
-        GLCD_flip();
-        GLCD_Render();
-      }
-    }
-
-    if (inic == 7)
-    {
-      glcd_init_header();
-      GLCD_GotoXY(0, 30);
-      GLCD_PrintString("... init mqtt");
-      GLCD_flip();
-      GLCD_Render();
-      mqtt_client.setServer(device.mqtt_server, 1883);
-      mqtt_client.setCallback(mqtt_callback);
-    }
-
-    if (inic == 8)
-    {
-      glcd_init_header();
-      GLCD_GotoXY(0, 30);
-      GLCD_PrintString("... init pripojeni");
-      GLCD_flip();
-      GLCD_Render();
-      Ethernet.begin(device.mac, device.myIP, device.myDNS, device.myGW, device.myMASK);
-
-    }
-
-    if (inic == 9)
-    {
-      glcd_init_header();
-      GLCD_GotoXY(0, 30);
-      GLCD_PrintString("... mqtt connect");
-      GLCD_flip();
-      GLCD_Render();
-      mqtt_reconnect();
-    }
-
-    if (inic == 10)
-    {
-      glcd_init_header();
-      GLCD_GotoXY(0, 30);
-      GLCD_PrintString("... ntp time");
-      GLCD_flip();
-      GLCD_Render();
-      timeClient.begin();
-      timeClient.setPoolServerName("192.168.2.1");
-      timeClient.update();
-    }
-
-
-    if (inic == 11)
-    {
-      glcd_init_header();
-      GLCD_GotoXY(0, 30);
-      GLCD_PrintString("... hotovo ...");
-      GLCD_flip();
-      GLCD_Render();
-    }
-
-    delay(50);
-  }
-}
-///konec setup
-
-
-
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-uint8_t init_mpc(void)
-{
-  Wire.beginTransmission(0x20);
-  Wire.write(0x0A); // ICON
-  Wire.write(0xff);
-  Wire.endTransmission();
-
-  Wire.beginTransmission(0x20);
-  Wire.write(0x00); // IODIRA register
-  Wire.write(0x00); // set entire PORT A to output
-  Wire.endTransmission();
-
-  Wire.beginTransmission(0x20);
-  Wire.write(0x10); // IODIRB register
-  Wire.write(0xff); // set entire PORT B to input
-  Wire.endTransmission();
-
-  Wire.beginTransmission(0x20);
-  Wire.write(0x16); // GPPUB register
-  Wire.write(0xff); // pullup
-  Wire.endTransmission();
-}
-uint8_t read_from_mcp(void)
-{
-  uint8_t input;
-  // read the inputs of PORT B
-  Wire.beginTransmission(0x20);
-  Wire.write(0x19);
-  Wire.endTransmission();
-  Wire.requestFrom(0x20, 1);
-  input = Wire.read();
-  return input;
-}
-void write_to_mcp(uint8_t data)
-{
-  // write that input to PORT A
-  Wire.beginTransmission(0x20);
-  Wire.write(0x09); // address PORT A
-  Wire.write(data);    // PORT A
-  Wire.endTransmission();
-}
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-void kalibrace_touchpad(void)
-{
-  uint8_t itmp = EEPROM.read(my_sense);
-  //analogWrite(SENSE, itmp);
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-void split(uint32_t number)
-{
-  jednotky = (number / 1) % 10;
-  desitky = (number / 10) % 10;
-  stovky = (number / 100) % 10;
-  tisice = (number / 1000) % 10;
-  destisice = (number / 10000) % 10;
-  statisice = (number / 100000) % 10;
-}
-
-
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////vyhledani zarizeni na hw 1wire sbernici////////
 uint8_t one_hw_search_device(uint8_t idx)
 {
@@ -2124,6 +1593,479 @@ uint8_t mereni_hwwire(uint8_t maxidx = 2)
   }
   return status;
 }
+
+
+void thermostat(void)
+{
+  uint8_t tdsid = 0;
+  uint8_t tmode = 0;
+  uint8_t tout = 0;
+  struct_DDS18s20 tds;
+  for (uint8_t tix = 0; tix < MAX_THERMOSTAT; tix++)
+  {
+    tdsid = thermostat_get_asociate_tds(tix);
+    tmode = thermostat_get_ring_mode(tix);
+    tout = thermostat_get_output(tix);
+    if (tmode == TERM_MODE_OFF)
+    {
+      mqtt_publis_output(tout, POWER_OUTPUT_OFF);
+    }
+    if (tmode == TERM_MODE_MAX)
+    {
+      mqtt_publis_output(tout, POWER_OUTPUT_MAX);
+    }
+
+    if (tmode == TERM_MODE_MAN)
+    {
+    if (get_tds18s20(tdsid, &tds) == 1)
+      if (tds.used == 1) if (status_tds18s20[tdsid].online == True)
+          if (status_tds18s20[tdsid].temp )
+    }
+    
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void setup(void) {
+  char tmp1[20];
+  char tmp2[20];
+  uint8_t itmp;
+  boolean bol;
+
+
+  struct_DDS18s20 tds;
+  // put your setup code here, to run once:
+  // komunikace přes sériovou linku rychlostí 19200
+  //Serial.begin(38400);
+
+  menu_history_init(&rm);
+  menu_init(&rm);
+  menu_root_setname(&rm, title_root_termostat);
+
+  menu_item_set_properties(&item_show_temp, title_item_menu_temp, TYPE_FUNCTION, show_temp_default);
+  menu_item_set_properties(&item_show_time, title_item_menu_time, TYPE_FUNCTION, show_time);
+  menu_root_additem(&rm, &item_show_time);
+  menu_root_additem(&rm, &item_show_temp);
+
+  menu_init(&term_max);
+  menu_init(&term_off);
+  menu_init(&term_prog);
+  menu_init(&term_climate);
+  menu_init(&term_man);
+  menu_init(&setup_menu);
+  menu_init(&setup_menu_jas);
+  menu_init(&setup_select_prog);
+
+  menu_root_setname(&term_man, title_term_man);
+  menu_root_setname(&term_prog, title_term_prog);
+  menu_root_setname(&term_max, title_term_max);
+  menu_root_setname(&term_climate, title_term_climate);
+  menu_root_setname(&term_off, title_term_off);
+  menu_root_setname(&setup_menu, title_setup_menu);
+  menu_root_setname(&setup_menu_jas, title_item_setup_jas);
+  menu_root_setname(&setup_select_prog, title_item_select_prog);
+
+  menu_item_set_properties(&item_zpet, title_menu_back, TYPE_STATIC, nullptr);
+  menu_item_set_properties(&item_set_jas, title_item_setup_jas, TYPE_STATIC, nullptr);
+  menu_item_set_properties(&item_mqtt_status, title_item_mqtt_status, TYPE_STATIC, nullptr);
+  menu_item_set_properties(&item_select_prog, title_item_select_prog, TYPE_STATIC, nullptr);
+
+
+  menu_root_additem(&setup_menu, &item_set_jas);
+  menu_root_additem(&setup_menu, &item_mqtt_status);
+  menu_root_additem(&setup_menu, &item_select_prog);
+  menu_root_additem(&setup_menu, &item_zpet);
+
+
+  menu_item_set_properties(&item_set_man_temp, title_term_man, TYPE_DYNAMIC, set_man_term_temp, 0, 32);
+
+  menu_item_set_properties(&item_set_jas_dyn, title_item_setup_jas_dynamic, TYPE_DYNAMIC, nullptr, 1, 16);
+  menu_item_set_properties(&item_set_jas_auto, title_item_setup_jas_auto, TYPE_STATIC, nullptr);
+
+  menu_item_set_properties(&item_set_select_prog, title_item_set_select_prog, TYPE_DYNAMIC, set_select_active_prog, 1, 8);
+
+  menu_root_additem(&setup_menu_jas, &item_set_jas_dyn);
+  menu_root_additem(&setup_menu_jas, &item_set_jas_auto);
+
+  menu_root_additem(&term_man, &item_set_man_temp);
+
+  menu_root_additem(&setup_select_prog, &item_set_select_prog);
+
+
+
+
+  nRF.begin();
+  nRF.setPALevel(RF24_PA_LOW);
+
+  nRF.openReadingPipe(1, adresaPrijimac);
+  nRF.startListening();
+
+
+
+  pinMode(ETH_RST, OUTPUT);
+  digitalWrite(ETH_RST, LOW);
+  for (uint16_t i = 0; i < 4024; i++);
+  digitalWrite(ETH_RST, HIGH);
+
+
+  statisice = '-';
+  destisice = '-';
+  tisice = '-';
+  stovky = '-';
+  desitky = '-';
+  jednotky = '-';
+  display_pos = 0;
+
+
+
+
+  ds2482_address[0].i2c_addr = 0b0011000;
+  ds2482_address[0].HWwirenum = 0;
+  ds2482_address[0].hwwire_cekam = false;
+
+  noInterrupts();           // disable all interrupts
+  //pinMode(ETH_INT, INPUT_PULLUP);
+
+
+  pinMode(LED, OUTPUT);
+
+  pinMode(tr1, OUTPUT);
+  pinMode(tr2, OUTPUT);
+  pinMode(tr3, OUTPUT);
+  pinMode(tr4, OUTPUT);
+  pinMode(tr5, OUTPUT);
+  pinMode(tr6, OUTPUT);
+
+  pinMode(rs485, OUTPUT);
+  pinMode(PWM_DISP, OUTPUT);
+  pinMode(PWM_KEY, OUTPUT);
+  pinMode(DP, OUTPUT);
+
+  pinMode(SER1, OUTPUT);
+  pinMode(SER2, OUTPUT);
+  pinMode(SCLK, OUTPUT);
+  pinMode(PCLK, OUTPUT);
+
+  digitalWrite(tr1, 1);
+  digitalWrite(tr2, 1);
+  digitalWrite(tr3, 1);
+  digitalWrite(tr4, 1);
+  digitalWrite(tr5, 1);
+  digitalWrite(tr6, 1);
+  digitalWrite(DP, 1);
+
+  //digitalWrite(rs485, LOW);
+
+
+  TCCR3A = 0;
+  TCCR3B  = (1 << CS31);
+  timer3_counter = 61100;/// cca 450Hz
+  TCNT3 = timer3_counter;
+  TIMSK3 |= (1 << TOIE3);
+
+
+
+  //TCCR0B = TCCR0B & 0b11111000 | 0x02;
+  //TCCR1B = TCCR1B & 0b11111000 | 0x02;
+
+  interrupts();             // enable all interrupts
+
+  rtc.begin();
+
+
+
+
+
+  for (uint8_t inic = 0; inic < 13; inic++)
+  {
+    if (inic == 0)
+    {
+      if (EEPROM.read(set_default_values) == 255)
+      {
+
+        strcpy(tmp1, "I0-FR-");
+        show_direct(tmp1);
+
+        EEPROM.write(set_default_values, 0);
+        EEPROM.write(my_jas_disp, 240);
+        EEPROM.write(my_jas_key, 240);
+        EEPROM.write(my_rs_id, 31);
+        //max_program = 0;
+        //thermostat_set_availability_program();
+        //thermostat_set_mode(0);
+        EEPROM.write(my_sense, 127);
+        for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+        {
+          thermostat_set_asociate_tds(idx, 255);
+          thermostat_set_mezni(idx, 220);
+          thermostat_set_program_id(idx, 0);
+          thermostat_set_status(idx, 0);
+          thermostat_set_ready(idx, 0);
+          thermostat_set_output(idx, 255);
+          thermostat_set_asociate_tds(idx, 255);
+          thermostat_set_ring_mode(idx, 0);
+          thermostat_set_name(idx, "FREE");
+        }
+        for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXDEVICES; idx++)
+        {
+          get_tds18s20(idx, &tds);
+          strcpy(tds.name, "FREE");
+          tds.used = 0;
+          tds.offset = 0;
+          tds.assigned_ds2482 = 0;
+          set_tds18s20(idx, &tds);
+        }
+        rtc.adjust(DateTime(2018, 12, 14, 17, 14, 0));
+        device.mac[0] = 2; device.mac[1] = 1; device.mac[2] = 2; device.mac[3] = 3; device.mac[4] = 4; device.mac[5] = 5;
+        device.myIP[0] = 192; device.myIP[1] = 168; device.myIP[2] = 2; device.myIP[3] = 111;
+        device.myMASK[0] = 255; device.myMASK[1] = 255; device.myMASK[2] = 255; device.myMASK[3] = 0;
+        device.myGW[0] = 192; device.myGW[1] = 168; device.myGW[2] = 2; device.myGW[3] = 1;
+        device.myDNS[0] = 192; device.myDNS[1] = 168; device.myDNS[2] = 2; device.myDNS[3] = 1;
+        device.mqtt_server[0] = 192; device.mqtt_server[1] = 168; device.mqtt_server[2] = 2; device.mqtt_server[3] = 1;
+        device.ntp_server[0] = 192; device.ntp_server[1] = 168; device.ntp_server[2] = 2; device.ntp_server[3] = 1;
+        device.mqtt_port = 1883;
+        strcpy(device.mqtt_user, "saric");
+        strcpy(device.mqtt_key, "no");
+        save_setup_network();
+        device_set_name("TERM E1");
+        char hostname[10];
+        device_get_name(hostname);
+        delay(2000);
+      }
+    }
+
+    if (inic == 1)
+    {
+      strcpy(tmp1, "I1-LN-");
+      show_direct(tmp1);
+      load_setup_network();
+    }
+
+    if (inic == 2)
+    {
+      strcpy(tmp1, "I2-OV-");
+      show_direct(tmp1);
+      jas_disp = EEPROM.read(my_jas_disp);
+      jas_key = EEPROM.read(my_jas_key);
+      rsid = EEPROM.read(my_rs_id);
+      analogWrite(PWM_DISP, jas_disp);
+      analogWrite(PWM_KEY, jas_key);
+      //thermostat_get_availability_program();
+      //thermostat_get_mode();
+    }
+
+
+    if (inic == 3)
+    {
+
+      itoa(ds2482_address[0].i2c_addr, tmp1, 10);
+      if (ds2482reset(ds2482_address[0].i2c_addr) == DS2482_ERR_OK)
+      {
+        strcpy(tmp1, "I3-1W-");
+        show_direct(tmp1);
+      }
+      else
+      {
+        strcpy(tmp1, "I3-ERR");
+        show_direct(tmp1);
+      }
+      Global_HWwirenum = 0;
+      one_hw_search_device(0);
+    }
+
+    if (inic == 4)
+    {
+      strcpy(tmp1, "I4-MPC");
+      show_direct(tmp1);
+      init_mpc();
+      write_to_mcp(255);
+      for (uint8_t i = 0; i < 8; i++)
+      {
+        write_to_mcp(~(1 << i));
+        tecka = (1 << i);
+        delay(50);
+      }
+      for (uint8_t i = 0; i < 8; i++)
+      {
+        write_to_mcp(~(1 << (7 - i)));
+        tecka = (1 << (7 - i));
+        delay(50);
+      }
+      tecka = 0;
+      write_to_mcp(255);
+    }
+
+    if (inic == 5)
+    {
+      strcpy(tmp1, "I5-KEY");
+      show_direct(tmp1);
+      kalibrace_touchpad();
+    }
+
+    if (inic == 6)
+    {
+      if (!rtc.isrunning())
+      {
+        //GLCD_PrintString("... chyba!!!");
+        strcpy(tmp1, "I6RCEE");
+        show_direct(tmp1);
+      }
+      else
+      {
+        strcpy(tmp1, "I6RCOK");
+        show_direct(tmp1);
+      }
+    }
+
+    if (inic == 7)
+    {
+      strcpy(tmp1, "I7MQQT");
+      show_direct(tmp1);
+      mqtt_client.setServer(device.mqtt_server, 1883);
+      mqtt_client.setCallback(mqtt_callback);
+    }
+
+    if (inic == 8)
+    {
+      if ( Enc28J60Network::linkStatus() == 1)
+      {
+        strcpy(tmp1, "I8-UP-");
+        link_status = 1;
+      }
+      else
+      {
+        strcpy(tmp1, "I8DOWN");
+        link_status = 0;
+      }
+      show_direct(tmp1);
+    }
+
+    if (inic == 9)
+    {
+      strcpy(tmp1, "I9-ETH");
+      show_direct(tmp1);
+      Ethernet.begin(device.mac, device.myIP, device.myDNS, device.myGW, device.myMASK);
+    }
+
+    if (inic == 10)
+    {
+      strcpy(tmp1, "I10CON");
+      show_direct(tmp1);
+      delay(1000);
+      if (link_status == 1 && !mqtt_client.connected())
+        bol = mqtt_reconnect();
+      if (bol == false)
+      {
+        strcpy(tmp1, "I10ERR");
+        show_direct(tmp1);
+      }
+    }
+
+    if (inic == 11)
+    {
+      strcpy(tmp1, "I11NTP");
+      show_direct(tmp1);
+      timeClient.begin();
+      timeClient.setTimeOffset(3600);
+      tmp2[0] = 0;
+      for (uint8_t i = 0; i < 4; i++)
+      {
+        itoa(device.ntp_server[i], tmp1, 10);
+        strcat(tmp2, tmp1);
+        if (i < 3)
+          strcat(tmp2, ".");
+      }
+      timeClient.setPoolServerName(tmp2);
+      timeClient.update();
+      timeClient.end();
+    }
+
+
+    if (inic == 12)
+    {
+      strcpy(tmp1, "I12HOT");
+      show_direct(tmp1);
+    }
+
+    delay(1000);
+  }
+}
+///konec setup
+
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+uint8_t init_mpc(void)
+{
+  Wire.beginTransmission(0x20);
+  Wire.write(0x0A); // ICON
+  Wire.write(0xff);
+  Wire.endTransmission();
+
+  Wire.beginTransmission(0x20);
+  Wire.write(0x00); // IODIRA register
+  Wire.write(0x00); // set entire PORT A to output
+  Wire.endTransmission();
+
+  Wire.beginTransmission(0x20);
+  Wire.write(0x10); // IODIRB register
+  Wire.write(0xff); // set entire PORT B to input
+  Wire.endTransmission();
+
+  Wire.beginTransmission(0x20);
+  Wire.write(0x16); // GPPUB register
+  Wire.write(0xff); // pullup
+  Wire.endTransmission();
+}
+uint8_t read_from_mcp(void)
+{
+  uint8_t input;
+  // read the inputs of PORT B
+  Wire.beginTransmission(0x20);
+  Wire.write(0x19);
+  Wire.endTransmission();
+  Wire.requestFrom(0x20, 1);
+  input = Wire.read();
+  return input;
+}
+void write_to_mcp(uint8_t data)
+{
+  // write that input to PORT A
+  Wire.beginTransmission(0x20);
+  Wire.write(0x09); // address PORT A
+  Wire.write(data);    // PORT A
+  Wire.endTransmission();
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void split(uint32_t number)
+{
+  jednotky = (number / 1) % 10;
+  desitky = (number / 10) % 10;
+  stovky = (number / 100) % 10;
+  tisice = (number / 1000) % 10;
+  destisice = (number / 10000) % 10;
+  statisice = (number / 100000) % 10;
+}
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2139,329 +2081,13 @@ void shiftout(uint16_t data)
   }
   digitalWrite(PCLK, 1);
 }
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void show_direct(char *tmp)
-{
-  jednotky = tmp[5];
-  desitky = tmp[4];
-  stovky = tmp[3];
-  tisice = tmp[2];
-  destisice = tmp[1];
-  statisice = tmp[0];
-}
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  void set_term_global(uint8_t key, uint8_t term_id)
-  {
-  if (thermostat_get_ready(term_id) == 1)
-  {
-    int tt = thermostat_get_mezni(term_id);
-    if (key == TL_UP)
-    {
-      delay_show_menu = 0;
-      if (tt < MAX_TEMP)
-        tt = tt + 5;
-      thermostat_set_mezni(term_id, tt);
-
-    }
-    if (key == TL_DOWN)
-    {
-      delay_show_menu = 0;
-      if (tt > MIN_TEMP)
-        tt = tt - 5;
-      thermostat_set_mezni(term_id, tt);
-    }
-  }
-  }
-*/
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  void show_term_set_global(void)
-  {
-  show_term_set_global_id(0);
-  }
-
-  void show_term_set_global_id(uint8_t id)
-  {
-  /// todo nejak vyresit predani pres parametr ///
-  uint8_t term_id = id;
-  char tmp[10];
-  char tmmp[10];
-  int tt;
-  char c[5];
-  tmp[0] = 0;
-  tmmp[0] = 0;
-  uint8_t te = 0;
-  if (thermostat_get_ready(term_id) == 1)
-  {
-    thermostat_get_name(term_id, tmmp);
-    if (strlen(tmmp) == 0)
-    {
-      strcpy(tmp, "I");
-      itoa(term_id,  c, 10);
-      strcat(tmp, c);
-    }
-    else
-      for (uint8_t p = 0; p < 2; p++)
-      {
-        tmp[p] = tmmp[p];
-        tmp[p + 1] = 0;
-      }
-    strcat(tmp, " ");
-    te = strlen(tmp);
-    tt = thermostat_get_mezni(term_id);
-    itoa(tt,  c, 10);
-    //// magic kvuli cislu 0.5
-    if (tt < 10 ) {
-      c[1] = c[0];
-      c[0] = '0';
-      c[2] = 0;
-    }
-    /// konec magicu
-    if ((tt / 10) >= 10)
-      te = te + 1;
-    //if ((tt / 10) < 10)
-    //  te = te + 2;
-    tecka = (1 << te);
-    strcat(tmp, c);
-  }
-  else
-  {
-    strcpy(tmp, "ID");
-    itoa(term_id,  c, 10);
-    strcat(tmp, c);
-    strcat(tmp, "ERR");
-    tecka = 0;
-  }
-  for (uint8_t j = strlen(tmp); j < 6; j++) tmp[j] = ' ';
-  jednotky = tmp[5];
-  desitky = tmp[4];
-  stovky = tmp[3];
-  tisice = tmp[2];
-  destisice = tmp[1];
-  statisice = tmp[0];
-  }
-*/
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  void show_term_prog(void)
-  {
-  char c[3];
-  tecka = 0b00000000;
-  uint8_t pi = thermostat_get_program_id(0);
-
-  itoa(pi,  c, 10);
-  if (pi < 10)
-  {
-    jednotky = c[0];
-    desitky = ' ';
-  }
-  else
-  {
-    desitky = c[0];
-    jednotky = c[1];
-  }
-
-  if ((max_program & (1 << pi)) != 0 )
-  {
-    stovky = 'A';
-  }
-  else
-  {
-    stovky = 'D';
-  }
-
-  tisice = ' ';
-  destisice = 'R';
-  statisice = 'P';
-  }
-*/
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  void set_term_prog(uint8_t key)
-  {
-  uint8_t poc;
-  poc = thermostat_get_program_id(0);
-  if (key == TL_UP)
-  {
-    if (poc < AVAILABLE_PROGRAM) poc++;
-    delay_show_menu = 0;
-  }
-  ////
-  if (key == TL_DOWN)
-  {
-    if (poc > 0) poc--;
-    delay_show_menu = 0;
-  }
-  ///
-  thermostat_set_program_id(0, poc);
-  }
-*/
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void back(void)
-{
-  char tmp[8];
-  get_current_item(tmp);
-  show_direct(tmp);
-}
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-  void show_termstav(void)
-  {
-  char tmp[8];
-  char tml[5];
-  tmp[0] = 0;
-  tecka = 0b00000000;
-  /// TODO neco mi stale prepisuje pametovou banku, overit co by mohlo
-  strcpy(tmp, "-    -");
-
-  if (thermostat_get_status(0) == TERM_STAV_STOP)
-  {
-    strcpy(tmp, "T OFF ");
-  }
-  if (thermostat_get_status(0) == TERM_STAV_TOPI)
-  {
-    strcpy(tmp, "TON");
-    struct_DDS18s20 tds;
-    get_tds18s20(0, &tds);
-    if  ((tds.used == 1) && (status_tds18s20[0].online == True) && (thermostat_get_ready(0) == 1))
-    {
-      int tt = (status_tds18s20[0].temp / 100) - int(thermostat_get_mezni(0));
-      if (tt >= 0)
-      {
-        itoa(tt, tml, 10);
-        if (tt > 0 && tt < 10)
-          strcat(tmp, " 0");
-        else
-          strcat(tmp, " ");
-      }
-      else
-      {
-        itoa(tt * (-1), tml, 10);
-        if (tt < 0 && tt > -10)
-          strcat(tmp, "-0");
-        else
-          strcat(tmp, "-");
-      }
-
-      if ( ((tt < 100) && (tt >= 0)) || ( (tt > -100) && (tt < 0) ) )
-        tecka = 0b00010000;
-      else
-        tecka = 0b00000000;
-
-      strcat(tmp, tml);
-    }
-
-    else
-      strcpy(tmp, "T ERR");
-  }
-  if (thermostat_get_status(0) == TERM_OK)
-  {
-    strcpy(tmp, "T *OK*");
-  }
-  jednotky = tmp[5];
-  desitky = tmp[4];
-  stovky = tmp[3];
-  tisice = tmp[2];
-  destisice = tmp[1];
-  statisice = tmp[0];
-  }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-  void show_temp_default(void)
-  {
-  char c[4];
-  int tt;
-  char tmp[8];
-  uint8_t idx = 0;
-  tmp[0] = 0;
-  struct_DDS18s20 tds;
-
-  get_tds18s20(idx, &tds);
-  if ((tds.used == 1) && (status_tds18s20[idx].online == True))
-  {
-    tt = status_tds18s20[idx].temp;
-    if (tt < 0) tt = tt * -1;
-    itoa(tt / 100, c, 10);
-    if ((tt / 1000) > 10)
-      tecka = 0b00001000;
-    else
-      tecka = 0b00000100;
-    if (tt == 0)
-    {
-      c[0] = '0';
-      c[1] = '0';
-    }
-    if (status_tds18s20[idx].temp >= 0)
-      strcpy(tmp, "t ");
-    if (status_tds18s20[idx].temp < 0)
-      strcpy(tmp, "t-");
-    strcat(tmp, c);
-    strcat(tmp, "C");
-  }
-  else
-  {
-    strcpy(tmp, "t ERR ");
-  }
-
-  if (tmp[5] == 0) jednotky = ' ';
-  else jednotky = tmp[5];
-  if (tmp[4] == 0)  desitky = ' ';
-  else desitky = tmp[4];
-  stovky = tmp[3];
-  tisice = tmp[2];
-  destisice = tmp[1];
-  statisice = tmp[0];
-  }
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-void show_time(void)
-{
-  char c[4];
-  char tmp[8];
-  c[0] = 0;
-  tmp[0] = 0;
-  tecka = 0b00000000;
-  if ((now.hour() < 24) && (now.minute() < 60) && (now.second() < 60))
-  {
-    itoa(now.hour(), c, 10);
-    if (now.hour() < 10) strcat(tmp, "0");
-    strcat(tmp, c);
-    if ((now.second() % 2) == 0)
-      strcat(tmp, "'");
-    else
-      strcat(tmp, ",");
-    itoa(now.minute(), c, 10);
-    if (now.minute() < 10) strcat(tmp, "0");
-    strcat(tmp, c);
-    strcat(tmp, " ");
-  }
-  else
-  {
-    strcpy(tmp, "ERR---");
-  }
-  jednotky = tmp[5];
-  desitky = tmp[4];
-  stovky = tmp[3];
-  tisice = tmp[2];
-  destisice = tmp[1];
-  statisice = tmp[0];
-}
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 uint8_t Bit_Reverse( uint8_t x )
@@ -2474,37 +2100,7 @@ uint8_t Bit_Reverse( uint8_t x )
 
 
 
-/*
-  void led_display_text_2(uint8_t input)
-  {
-  char c[4];
-  led_display_text[0] = 0;
-  if (input < 10) strcpy(led_display_text, " ");
-  itoa(input, c, 10);
-  strcat(led_display_text, c);
-  tecka = 0;
-  }
 
-  void led_display_text_string(char *input)
-  {
-  led_display_text[0] = 0;
-  if (strlen(input) < 2) strcpy(led_display_text, " ");
-  strcat(led_display_text, input);
-  tecka = 0;
-  }
-*/
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  void f_error(void)
-  {
-  jednotky = led_display_text[5];
-  desitky = led_display_text[4];
-  stovky = led_display_text[3];
-  tisice = led_display_text[2];
-  destisice = led_display_text[1];
-  statisice = led_display_text[0];
-  }
-*/
 
 
 
@@ -2530,19 +2126,28 @@ void loop()
 
 
 
-  /*
-    if ( Enc28J60Network::linkStatus() == 1)
-      statisice = 'A';
-    else
-      statisice = 'E';
-  */
 
-  if (!mqtt_client.connected()) {
-    mqtt_reconnect();
+  if ( Enc28J60Network::linkStatus() == 1)
+    link_status = 1;
+  else
+    link_status = 0;
+
+
+  if (link_status == 1)
+  {
+    if (!mqtt_client.connected()) {
+      mqtt_reconnect();
+    }
+    mqtt_client.loop();
   }
-  mqtt_client.loop();
+  else
+    mqtt_client.disconnect();
 
-
+  if (nRF.available() )
+  {
+    nRF.read( &nrf_receive_data, sizeof(nrf_receive_data) );
+    send_mqtt_general_payload("NRF", nrf_receive_data);
+  }
 
 
   /*
@@ -2610,12 +2215,13 @@ void loop()
 
 
 
+
   if (last_sync > 100)
   {
     led = led + LED_ERR;
   }
 
-  thermostat_get_mode();
+  term_mode = thermostat_get_ring_mode(0);
   if (term_mode == TERM_MODE_OFF) led = led + LED_OFF;
   if (term_mode == TERM_MODE_MAX) led = led + LED_MAX;
   if (term_mode == TERM_MODE_PROG) led = led + LED_PROG;
@@ -2629,196 +2235,213 @@ void loop()
     write_to_mcp(~led);
   }
 
-  /*
-    get_current_menu(curr_menu);
-    get_current_item(curr_item);
-    //// defualt screen uplne hlavni menu
-    if (strcmp_P(curr_menu, title_root_termostat) == 0)
-    {
-      /// prepinej zobrazeni cas/teplota/stav termostatu
-      if (key == TL_OK)
-      {
-        menu_rotate();
-        key = 0;
-      }
-      if (key == TL_OFF)
-      {
-        thermostat_set_mode(TERM_MODE_OFF);
-        menu_set_root_menu(&term_off);
-        delay_show_menu = 0;
-        key = 0;
-      }
-      if (key == TL_MAX)
-      {
-        thermostat_set_mode(TERM_MODE_MAX);
-        menu_set_root_menu(&term_max);
-        delay_show_menu = 0;
-        key = 0;
-      }
-      if (key == TL_PROG)
-      {
-        thermostat_set_mode(TERM_MODE_PROG);
-        menu_set_root_menu(&term_prog);
-        delay_show_menu = 0;
-        key = 0;
-      }
-      if (key == TL_CLIMA)
-      {
-        thermostat_set_mode(TERM_MODE_CLIMATE);
-        menu_set_root_menu(&term_climate);
-        delay_show_menu = 0;
-        key = 0;
-      }
-      if ((key == TL_UP) || (key == TL_DOWN))
-      {
-        thermostat_set_mode(TERM_MODE_MAN);
-        menu_set_root_menu(&term_man);
-        delay_show_menu = 0;
-        key = 0;
-      }
 
-      if (key_press == TL_OK)
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  //// defualt screen uplne hlavni menu
+  if (strcmp_P(curr_menu, title_root_termostat) == 0)
+  {
+    /// prepinej zobrazeni cas/teplota/stav termostatu
+    if (key == TL_OK)
+    {
+      menu_next();
+      key = 0;
+    }
+    if (key == TL_OFF)
+    {
+      thermostat_set_ring_mode(0, TERM_MODE_OFF);
+      menu_set_root_menu(&term_off);
+      delay_show_menu = 0;
+      key = 0;
+    }
+    if (key == TL_MAX)
+    {
+      thermostat_set_ring_mode(0, TERM_MODE_MAX);
+      menu_set_root_menu(&term_max);
+      delay_show_menu = 0;
+      key = 0;
+    }
+    if (key == TL_PROG)
+    {
+      thermostat_set_ring_mode(0, TERM_MODE_PROG);
+      menu_set_root_menu(&term_prog);
+      delay_show_menu = 0;
+      key = 0;
+    }
+    if (key == TL_CLIMA)
+    {
+      thermostat_set_ring_mode(0, TERM_MODE_CLIMATE);
+      menu_set_root_menu(&term_climate);
+      delay_show_menu = 0;
+      key = 0;
+    }
+    if ((key == TL_UP) || (key == TL_DOWN))
+    {
+      thermostat_set_ring_mode(0, TERM_MODE_MAN);
+      term_man.args3 = (thermostat_get_mezni(0) - 160) / 5;
+      menu_set_root_menu(&term_man);
+      delay_show_menu = 0;
+      key = 0;
+    }
+
+    if (key_press == TL_OK)
+    {
+      menu_set_root_menu(&setup_menu);
+      key_press = 0;
+      key = 0;
+    }
+
+  }
+
+
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  //////////////////// hlavni setup menu
+  if (strcmp_P(curr_menu, title_setup_menu) == 0)
+  {
+    if (key == TL_UP) menu_next();
+    if (key == TL_DOWN) menu_prev();
+    ////
+    if (key == TL_OK)
+    {
+      /// podmenu jas
+      if (strcmp_P(curr_item, title_item_setup_jas) == 0)
       {
-        menu_set_root_menu(&setup_menu);
+        menu_set_root_menu(&setup_menu_jas);
+        setup_menu_jas.args3 = (255 - jas_disp) / 15;
+        key = 0;
+      }
+      /// menu mqtt status
+      if (strcmp_P(curr_item, title_item_mqtt_status) == 0)
+      {
+        //// vyber programu, vychozi pro term id 0
+      }
+      if (strcmp_P(curr_item, title_item_select_prog) == 0)
+      {
+        setup_select_prog.args3 = thermostat_get_program_id(0) + 1;
+        menu_set_root_menu(&setup_select_prog);
+        key = 0;
+      }
+      /// menu zpet
+      if (strcmp_P(curr_item, title_menu_back) == 0)
+      {
+        menu_back_root_menu();
         key_press = 0;
         key = 0;
       }
+    }
+  }
+  /// konec hlavniho setup menu
 
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  if (strcmp_P(curr_menu, title_item_select_prog) == 0)
+  {
+    if (key == TL_UP)
+    {
+      menu_next();
     }
+    if (key == TL_DOWN)
+    {
+      menu_prev();
+    }
+    if (key == TL_OK)
+    {
+      thermostat_set_program_id(0, setup_select_prog.args3 - 1);
+      menu_back_root_menu();
+    }
+  }
 
-
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    get_current_menu(curr_menu);
-    get_current_item(curr_item);
-    //////////////////// hlavni setup menu
-    if (strcmp_P(curr_menu, title_root_setup_menu) == 0)
+  /////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////
+  /// menu vyber programu
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  /// nastaveni jasu
+  if (strcmp_P(curr_menu, title_item_setup_jas) == 0)
+  {
+    if (key == TL_UP)
     {
-      if (key == TL_UP) menu_next();
-      if (key == TL_DOWN) menu_prev();
-      ////
-      if (key == TL_OK)
-      {
-        /// podmenu jas
-        if (strcmp_P(curr_item, title_item_menu_setup_jas) == 0)
-        {
-          menu_set_root_menu(&setup_menu_jas);
-          setup_menu_jas.args1 = (255 - jas_disp) / 15;
-          key = 0;
-        }
-      }
+      menu_next();
     }
-    /// konec hlavniho setup menu
-    /////////////////////////////
-    //////////////////////////////////////////////////////////////////////////////////////////
-    get_current_menu(curr_menu);
-    get_current_item(curr_item);
-    /// nastaveni jasu
-    if (strcmp_P(curr_menu, title_item_menu_setup_jas) == 0)
+    if (key == TL_DOWN)
     {
-      if (strcmp_P(curr_item, title_item_setup_jas) == 0)
-      {
-        uint8_t tmp8_1 = setup_menu_jas.args1;
-        if (key == TL_UP)
-        {
-          if (tmp8_1 < 17)tmp8_1++;
-        }
-        if (key == TL_DOWN)
-        {
-          if (tmp8_1 > 1)tmp8_1--;
-        }
-        setup_menu_jas.args1 = tmp8_1;
-        jas_disp = 255 - (15 * tmp8_1);
-        if (tmp8_1 == 17)
-        {
-          /// auto jas
-          led_display_text_string("A");
-        }
-        else
-        {
-          /// manualni jas
-          led_display_text_2(tmp8_1);
-          analogWrite(PWM_DISP, jas_disp);
-        }
-        if (key == TL_OK)
-        {
-          EEPROM.write(my_jas_disp, jas_disp);
-          menu_back_root_menu();
-        }
-      }
+      menu_prev();
     }
-    ///////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////
-    get_current_menu(curr_menu);
-    get_current_item(curr_item);
-    if (strcmp_P(curr_menu, title_item_menu_setup_prog) == 0)
+    jas_disp = 255 - (15 * setup_menu_jas.args3);
+    analogWrite(PWM_DISP, jas_disp);
+    if (key == TL_OK)
     {
-      if (strcmp_P(curr_item, title_item_setup_prog) == 0)
-      {
-        uint8_t tmp8_1 = setup_menu_prog[get_current_menu_idx()].args1;
-        if (key == TL_UP)
-        {
-          if (tmp8_1 < AVAILABLE_PROGRAM)tmp8_1++;
-        }
-        if (key == TL_DOWN)
-        {
-          if (tmp8_1 > 1)tmp8_1--;
-        }
-        setup_menu_prog[get_current_menu_idx()].args1 = tmp8_1;
-        if (tmp8_1 == 0)
-          led_display_text_string("--");
-        else
-          led_display_text_2(tmp8_1);
-      }
+      EEPROM.write(my_jas_disp, jas_disp);
+      menu_back_root_menu();
+      key = 0;
     }
+  }
 
 
-    /// vraceni se zpet po 10 sec
-    if (strcmp_P(curr_menu, title_root_termman) == 0)
+  ///////////////////////////////////////////////////////////////////
+  //// rucni nastaveni teploty
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  if (strcmp_P(curr_menu, title_term_man) == 0)
+  {
+    if (key == TL_UP)
     {
-      if ((key == TL_UP) || (key == TL_DOWN))
-      {
-        set_term_global(key, 0);
-        delay_show_menu = 0;
-      }
-      if (delay_show_menu > 10) menu_back_root_menu();
+      menu_next();
+      delay_show_menu = 0;
     }
-    if (strcmp_P(curr_menu, title_root_termoff) == 0)
+    if (key == TL_DOWN)
     {
-      if (key == TL_OFF) menu_back_root_menu();
-      if (delay_show_menu > 5) menu_back_root_menu();
+      menu_prev();
+      delay_show_menu = 0;
     }
-    if (strcmp_P(curr_menu, title_root_termmax) == 0)
+    if (delay_show_menu > 10 || key == TL_OK)
     {
-      if (key == TL_MAX) menu_back_root_menu();
-      if (delay_show_menu > 5) menu_back_root_menu();
+      delay_show_menu = 0;
+      menu_back_root_menu();
+      thermostat_set_mezni(0, 160 + (term_man.args3 * 5));
     }
-    if (strcmp_P(curr_menu, title_root_termprog) == 0)
-    {
-      if (key == TL_PROG) menu_back_root_menu();
-      if (delay_show_menu > 10) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_root_termclimate) == 0)
-    {
-      if (key == TL_CLIMA) menu_back_root_menu();
-      if (delay_show_menu > 10) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_error) == 0)
-    {
-      if (delay_show_menu > 2) menu_back_root_menu();
-    }
+    key = 0;
+  }
 
-    ///globalni back
-    get_current_menu(curr_menu);
-    get_current_item(curr_item);
-    if (strcmp_P(curr_item, title_item_menu_back) == 0)
+  /// vraceni se zpet po 10 sec
+  if (strcmp_P(curr_menu, title_term_off) == 0)
+  {
+    if (key == TL_OFF) menu_back_root_menu();
+    if (delay_show_menu > 5) menu_back_root_menu();
+  }
+  if (strcmp_P(curr_menu, title_term_max) == 0)
+  {
+    if (key == TL_MAX) menu_back_root_menu();
+    if (delay_show_menu > 5) menu_back_root_menu();
+  }
+  if (strcmp_P(curr_menu, title_term_prog) == 0)
+  {
+    if (key == TL_PROG) menu_back_root_menu();
+    if (delay_show_menu > 10) menu_back_root_menu();
+  }
+  if (strcmp_P(curr_menu, title_term_climate) == 0)
+  {
+    if (key == TL_CLIMA) menu_back_root_menu();
+    if (delay_show_menu > 10) menu_back_root_menu();
+  }
+  if (strcmp_P(curr_menu, title_error) == 0)
+  {
+    if (delay_show_menu > 2) menu_back_root_menu();
+  }
+
+  ///globalni back
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  if (strcmp_P(curr_item, title_menu_back) == 0)
+  {
+    if (key == TL_OK)
     {
-      if (key == TL_OK)
-      {
-        menu_back_root_menu();
-        key = 0;
-      }
+      menu_back_root_menu();
+      key = 0;
     }
-  */
+  }
 
   ////////////////////
   /// kazdych 10sec
@@ -2828,6 +2451,7 @@ void loop()
     send_mqtt_onewire();
     send_mqtt_status();
     send_mqtt_ring();
+    thermostat();
   }
 
 
@@ -2944,18 +2568,6 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
 
 
 /*
-
-     GLCD_Clear();
-  GLCD_GotoXY(0, 0);
-  itoa(key, str1, 10);
-  GLCD_PrintString(str1);
-
-  GLCD_GotoXY(0, 16);
-  itoa(key_press, str1, 10);
-  GLCD_PrintString(str1);
-
-  GLCD_flip();
-  GLCD_Render();
 
   ////////////////////////////////////
   void send_ident(void)
@@ -3254,255 +2866,4 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
   ret = 1;
   return ret;
   }
-*/
-
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  void led_display_text_1_float3(uint8_t input1, float input2)
-  {
-  char c[4];
-  led_display_text[0] = 0;
-  itoa(input1, c, 10);
-  strcat(led_display_text, c);
-  itoa(input2 * 10, c, 10);
-  strcat(led_display_text, c);
-  tecka = 0b00010000;
-  }
-*/
-/*
-  void led_display_text_1_2(uint8_t input1, uint8_t input2, uint8_t mode)
-  {
-  char c[4];
-  led_display_text[0] = 0;
-  itoa(input1, c, 10);
-  strcat(led_display_text, c);
-  if ((mode == 10) && (input2 < 10)) strcat(led_display_text, "0");
-  if ((mode == 16) && (input2 < 16)) strcat(led_display_text, "0");
-  itoa(input2, c, mode);
-  strcat(led_display_text, c);
-  tecka = 0;
-  }
-
-      ;
-    /// vraceni se zpet po 10 sec
-    if (strcmp_P(curr_menu, title_root_fastsette) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 10) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_root_termoff) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 5) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_root_termmax) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 5) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_root_termprog) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 10) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_root_climate) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 10) menu_back_root_menu();
-    }
-    if (strcmp_P(curr_menu, title_error) == 0)
-    {
-      delay_show_menu++;
-      if (delay_show_menu > 2) menu_back_root_menu();
-    }
-*/
-
-/*
-  if ((key & TL_OFF) != 0)
-  {
-  led = led + LED_OFF;
-  }
-
-  if ((key & TL_PROG) != 0)
-  {
-  led = led + LED_PROG;
-  }
-
-  if ((key & TL_MAX) != 0)
-  {
-  led = led + LED_MAX;
-  }
-
-  if ((key & TL_STAV) != 0)
-  {
-  led = led + LED_STAV;
-  }
-
-  if ((key & TL_OK) != 0)
-  {
-  led = led + LED_OK;
-  }
-
-  if ((key & TL_DOWN) != 0)
-  {
-  led = led + LED_DOWN;
-  }
-
-  if ((key & TL_UP) != 0)
-  {
-  led = led + LED_UP;
-  }
-*/
-
-
-/*
-
-  //// hotkeys pridej/uber okamzitou teplotu
-  if ((key == TL_UP) || (key == TL_DOWN))
-  {
-    thermostat_set_mode(TERM_MODE_MAN);
-    delay_show_menu = 0;
-    menu_set_root_menu(&term_fast_set);
-    key = 0;
-  }
-
-  //// prepnuti do menu setup
-  if (key == TL_OK)
-  {
-    menu_set_root_menu(&setup_menu);
-    key = 0;
-  }
-  //// hotkeys menu vupnuti termostatu
-  if (key == TL_OFF)
-  {
-    thermostat_set_mode(TERM_MODE_OFF);
-    menu_set_root_menu(&term_off);
-    delay_show_menu = 0;
-    key = 0;
-  }
-  //// hotkeys top na maximalni teplotu
-  if (key == TL_MAX)
-  {
-    thermostat_set_mode(TERM_MODE_MAX);
-    delay_show_menu = 0;
-    menu_set_root_menu(&term_max);
-    key = 0;
-  }
-  //// hotkeys prepni program
-  if (key == TL_PROG)
-  {
-    thermostat_set_mode(TERM_MODE_PROG);
-    delay_show_menu = 0;
-    menu_set_root_menu(&term_prog);
-    key = 0;
-  }
-
-  if (key == (TL_MAX + TL_PROG))
-  {
-    thermostat_set_mode(TERM_MODE_CLIMATE);
-    delay_show_menu = 0;
-    menu_set_root_menu(&term_climate);
-    key = 0;
-  }
-  }
-
-*/
-
-/////////////////////////
-/*
-  get_current_menu(curr_menu);
-  get_current_item(curr_item);
-  /// nasteveni rs id
-  if (strcmp_P(curr_menu, title_item_menu_setup_bus) == 0)
-  {
-  if (strcmp_P(curr_item, title_item_setup_rs_id) == 0)
-  {
-    char tmp8_1 = setup_menu_rs_id.args1;
-    if (key == TL_MAX)
-    {
-      tmp8_1++;
-      if (tmp8_1 > 31) tmp8_1 = 0;
-    }
-    if (key == TL_OFF)
-    {
-      tmp8_1--;
-      if (tmp8_1 < 0) tmp8_1 = 31;
-    }
-    led_display_text_2(tmp8_1);
-    setup_menu_rs_id.args1 = uint8_t(tmp8_1);
-
-    ///
-    if (key == TL_OK)
-    {
-      menu_back_root_menu();
-      rsid = uint8_t(tmp8_1);
-      EEPROM.write(my_rs_id, rsid);
-      key = 0;
-    }
-  }
-  }
-  //// konec nastaveni rs id
-  ///////////////////////////////////////////////
-*/
-
-
-/*
-  //// menu termostat off
-  if (strcmp_P(curr_menu, title_root_termoff) == 0)
-  {
-  if (key == TL_OFF)
-  {
-    menu_back_root_menu();
-    key = 0;
-  }
-  }
-  //// menu termostat max
-  if (strcmp_P(curr_menu, title_root_termmax) == 0)
-  {
-  if (key == TL_MAX)
-  {
-    menu_back_root_menu();
-    key = 0;
-  }
-  }
-  //// menu termostat climate
-  if (strcmp_P(curr_menu, title_root_climate) == 0)
-  {
-  if (key == (TL_MAX + TL_PROG))
-  {
-    menu_back_root_menu();
-    key = 0;
-  }
-  }
-  //// menu termostat program
-  if (strcmp_P(curr_menu, title_root_termprog) == 0)
-  {
-  set_term_prog(key);
-  if (key == TL_PROG)
-  {
-    menu_back_root_menu();
-    key = 0;
-  }
-  }
-  //// menu pridej/uber okamzitou teplotu
-  if (strcmp_P(curr_menu, title_root_fastsette) == 0)
-  {
-  set_term_global(key, 0);
-  if (key == TL_OK)
-  {
-    menu_back_root_menu();
-    key = 0;
-  }
-  }
-
-
-
-*/
-
-
-/*
-
-
 */

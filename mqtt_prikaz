@@ -1,0 +1,5 @@
+mosquitto_pub -t "/thermctl-in/global/time/ntp" -m "yes";
+
+mosquitto_pub -t "/thermctl-in/TERM E1/tds/set/1/clear" -m "yes";
+
+mosquitto_pub -t "/thermctl-in/TERM E1/tds/associate" -m "0"
