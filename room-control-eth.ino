@@ -1,10 +1,10 @@
-#include <NTPClient.h>
+//#include <NTPClient.h>
 
 #include <ArduinoJson.h>
 
 
-#include <PubSubClient.h>
-#include <UIPEthernet.h>
+//#include <PubSubClient.h>
+//#include <UIPEthernet.h>
 
 
 #include <nRF24L01.h>
@@ -245,10 +245,10 @@ typedef struct struct_my_device
 RTC_DS1307 rtc;
 DateTime now;
 
-EthernetClient ethClient;
-EthernetUDP udpClient;
-PubSubClient mqtt_client(ethClient);
-NTPClient timeClient(udpClient);
+//EthernetClient ethClient;
+//EthernetUDP udpClient;
+//PubSubClient mqtt_client(ethClient);
+//NTPClient timeClient(udpClient);
 
 RF24 nRF(NRF_CE, NRF_CS);
 
