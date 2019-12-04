@@ -44,8 +44,9 @@
 #define TERM_MODE_OFF 0
 #define TERM_MODE_MAX 1
 #define TERM_MODE_PROG 2
-#define TERM_MODE_MAN 3
+#define TERM_MODE_MAN_HEAT 3
 #define TERM_MODE_CLIMATE 4
+#define TERM_MODE_MAN_COOL 5
 
 #define POWER_OUTPUT_OFF 0
 #define POWER_OUTPUT_MAX 1
@@ -221,6 +222,7 @@ typedef struct struct_my_device
   char mqtt_user[20];
   char mqtt_key[20];
   uint8_t ntp_server[4];
+  uint8_t nrf_channel;
 };
 
 #define nextfree 260
@@ -294,8 +296,16 @@ uint8_t re_at = 0;
 uint8_t r_id = 0;
 char uart_recv[UART_RECV_MAX_SIZE];
 
-byte adresaPrijimac[] = "prijimac00";
-char nrf_receive_data;
+uint8_t ladeni = 0;
+uint8_t scan_rf_net_enable = 0;
+uint8_t scan_rf_net_channel = 0;
+
+byte adresaPrijimac[] = {0, 0, 0, 0, 1};
+byte adresaVysilac[] = {1, 0, 0, 0, 1};
+
+uint8_t used_channels[128];
+static char nrf_receive_data[32];
+static char nrf_send_data[32];
 
 uint8_t link_status;
 
@@ -1279,7 +1289,7 @@ uint8_t convert_text_mode(char *str2)
   uint8_t mode = 0;
   if (strcmp(str2, "off") == 0) mode = TERM_MODE_OFF;
   if (strcmp(str2, "heat") == 0) mode = TERM_MODE_MAX;
-  if (strcmp(str2, "manual") == 0) mode = TERM_MODE_MAN;
+  if (strcmp(str2, "manual") == 0) mode = TERM_MODE_MAN_HEAT;
   if (strcmp(str2, "auto") == 0) mode = TERM_MODE_PROG;
   if (strcmp(str2, "cool") == 0) mode = TERM_MODE_CLIMATE;
   //if (strcmp(str2, "fan_only") == 0) mode = TERM_MODE_CLIMATE;
@@ -1291,7 +1301,7 @@ void convert_mode_text(uint8_t mode, char *str)
 {
   if (mode == TERM_MODE_OFF)   strcpy(str, "off");
   if (mode == TERM_MODE_MAX)   strcpy(str, "heat");
-  if (mode == TERM_MODE_MAN)   strcpy(str, "manual");
+  if (mode == TERM_MODE_MAN_HEAT)   strcpy(str, "manual");
   if (mode == TERM_MODE_PROG)   strcpy(str, "auto");
   if (mode == TERM_MODE_CLIMATE)   strcpy(str, "cool");
   //if (mode == TERM_MODE_FAN)   strcpy(str, "fan_only");
@@ -1332,7 +1342,24 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
 
   //// /thermctl/global/ping - test spojeni
 
+  //// /thermctl-in/XXXX/rf/scan - 0|1 zapnuti/vypnuti scanovani rf site
+  strcpy_P(str1, mqtt_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/rf/scan");
+  if (strcmp(str1, topic) == 0)
+  {
+    if (atoi(payload) == 1)
+    {
 
+      start_scan_rf_network();
+    }
+    else
+    {
+      stop_scan_rf_network();
+      scan_rf_network_public();
+    }
+  }
+  ///////////////
   //// /thermctl-in/XXXX/tds/associate - asociace do tds si pridam mac 1wire - odpoved je pod jakem ID to mam ulozeno
   strcpy_P(str1, mqtt_header_in);
   strcat(str1, device.nazev);
@@ -1474,7 +1501,7 @@ void mqtt_publis_output(uint8_t idx, uint8_t state)
   strcat(str_topic, "/state");
   itoa(state, payload, 10);
   mqtt_client.publish(str_topic, payload);
-  
+
 }
 //////////////////////////////////////////////////////
 boolean mqtt_reconnect(void)
@@ -1594,7 +1621,7 @@ uint8_t mereni_hwwire(uint8_t maxidx = 2)
   return status;
 }
 
-
+/////////////////////////////////////////////////////////////////////////////////////////////////////////
 void thermostat(void)
 {
   uint8_t tdsid = 0;
@@ -1615,15 +1642,37 @@ void thermostat(void)
       mqtt_publis_output(tout, POWER_OUTPUT_MAX);
     }
 
-    if (tmode == TERM_MODE_MAN)
+    if (tmode == TERM_MODE_MAN_HEAT)
     {
-    if (get_tds18s20(tdsid, &tds) == 1)
-      if (tds.used == 1) if (status_tds18s20[tdsid].online == True)
-          if (status_tds18s20[tdsid].temp )
+      if (get_tds18s20(tdsid, &tds) == 1)
+        if (tds.used == 1) if (status_tds18s20[tdsid].online == True)
+            if (status_tds18s20[tdsid].temp );
     }
-    
+
   }
 }
+
+
+char mqtt_log[128];
+uint8_t mqtt_log_cnt = 0;
+
+
+int printf_via_mqtt( char c, FILE *t)
+{
+  mqtt_log[mqtt_log_cnt] = c;
+  mqtt_log[mqtt_log_cnt + 1] = 0;
+  mqtt_log_cnt++;
+
+  if (mqtt_log_cnt > 127 || c == '\n' || c == 0)
+  {
+    mqtt_client.publish("/log", mqtt_log);
+    mqtt_log_cnt = 0;
+  }
+
+}
+
+
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup(void) {
@@ -1631,7 +1680,11 @@ void setup(void) {
   char tmp2[20];
   uint8_t itmp;
   boolean bol;
+  uint8_t devnull[2]
+  ;
+  device.nrf_channel = 100;
 
+  fdevopen( &printf_via_mqtt, 0);
 
   struct_DDS18s20 tds;
   // put your setup code here, to run once:
@@ -1694,13 +1747,11 @@ void setup(void) {
 
 
 
-  nRF.begin();
-  nRF.setPALevel(RF24_PA_LOW);
-
-  nRF.openReadingPipe(1, adresaPrijimac);
-  nRF.startListening();
 
 
+  pinMode(NRF_IRQ, INPUT);
+  pinMode(NRF_CE, OUTPUT);
+  pinMode(NRF_CS, OUTPUT);
 
   pinMode(ETH_RST, OUTPUT);
   digitalWrite(ETH_RST, LOW);
@@ -1756,6 +1807,7 @@ void setup(void) {
 
   //digitalWrite(rs485, LOW);
 
+  digitalWrite(LED, 1);
 
   TCCR3A = 0;
   TCCR3B  = (1 << CS31);
@@ -1776,7 +1828,7 @@ void setup(void) {
 
 
 
-  for (uint8_t inic = 0; inic < 13; inic++)
+  for (uint8_t inic = 0; inic < 15; inic++)
   {
     if (inic == 0)
     {
@@ -1906,23 +1958,45 @@ void setup(void) {
     {
       if (!rtc.isrunning())
       {
-        //GLCD_PrintString("... chyba!!!");
-        strcpy(tmp1, "I6RCEE");
+        strcpy(tmp1, "I6RTEE");
         show_direct(tmp1);
       }
       else
       {
-        strcpy(tmp1, "I6RCOK");
+        strcpy(tmp1, "I6RTOK");
         show_direct(tmp1);
       }
     }
 
     if (inic == 7)
     {
-      strcpy(tmp1, "I7MQQT");
+      strcpy(tmp1, "I7-NRF");
       show_direct(tmp1);
-      mqtt_client.setServer(device.mqtt_server, 1883);
-      mqtt_client.setCallback(mqtt_callback);
+
+      if (nRF.begin())
+      {
+        nRF.setPALevel(RF24_PA_LOW);
+        nRF.setChannel(device.nrf_channel);
+        nRF.enableAckPayload();
+        nRF.enableDynamicPayloads();
+        //nRF.setRetries(50, 50);
+        for (uint8_t pipe = 0; pipe < 6; pipe++)
+          nRF.closeReadingPipe(pipe);
+        nRF.openWritingPipe(adresaVysilac);
+        nRF.openReadingPipe(1, adresaPrijimac);
+
+        nRF.powerDown();
+        nRF.stopListening();
+        nRF.startListening();
+        nRF.powerUp();
+        nRF.writeAckPayload(1, &devnull, sizeof(devnull));
+      }
+      else
+      {
+        strcpy(tmp1, "NRFERR");
+        show_direct(tmp1);
+        delay(1000);
+      }
     }
 
     if (inic == 8)
@@ -1942,28 +2016,36 @@ void setup(void) {
 
     if (inic == 9)
     {
-      strcpy(tmp1, "I9-ETH");
+      strcpy(tmp1, "I9MQQT");
       show_direct(tmp1);
-      Ethernet.begin(device.mac, device.myIP, device.myDNS, device.myGW, device.myMASK);
+      mqtt_client.setServer(device.mqtt_server, 1883);
+      mqtt_client.setCallback(mqtt_callback);
     }
 
     if (inic == 10)
     {
-      strcpy(tmp1, "I10CON");
+      strcpy(tmp1, "I10ETH");
+      show_direct(tmp1);
+      Ethernet.begin(device.mac, device.myIP, device.myDNS, device.myGW, device.myMASK);
+    }
+
+    if (inic == 11)
+    {
+      strcpy(tmp1, "I11CON");
       show_direct(tmp1);
       delay(1000);
       if (link_status == 1 && !mqtt_client.connected())
         bol = mqtt_reconnect();
       if (bol == false)
       {
-        strcpy(tmp1, "I10ERR");
+        strcpy(tmp1, "I11ERR");
         show_direct(tmp1);
       }
     }
 
-    if (inic == 11)
+    if (inic == 12)
     {
-      strcpy(tmp1, "I11NTP");
+      strcpy(tmp1, "I12NTP");
       show_direct(tmp1);
       timeClient.begin();
       timeClient.setTimeOffset(3600);
@@ -1981,14 +2063,25 @@ void setup(void) {
     }
 
 
-    if (inic == 12)
+    if (inic == 13)
     {
-      strcpy(tmp1, "I12HOT");
+      strcpy(tmp1, "I13NPP");
+      show_direct(tmp1);
+      ladeni = ladeni + 1;
+      delay(1000);
+    }
+
+    if (inic == 14)
+    {
+      strcpy(tmp1, "I14HOT");
       show_direct(tmp1);
     }
 
-    delay(1000);
+    delay(500);
   }
+
+
+
 }
 ///konec setup
 
@@ -2123,8 +2216,8 @@ void loop()
   char cmd[MAX_TEMP_BUFFER];
   char args[MAX_TEMP_BUFFER];
   struct_DDS18s20 tds;
-
-
+  uint8_t pipeno;
+  uint8_t nrf_payload_len;
 
 
   if ( Enc28J60Network::linkStatus() == 1)
@@ -2143,11 +2236,25 @@ void loop()
   else
     mqtt_client.disconnect();
 
-  if (nRF.available() )
+
+  if (ladeni > 0)
   {
-    nRF.read( &nrf_receive_data, sizeof(nrf_receive_data) );
-    send_mqtt_general_payload("NRF", nrf_receive_data);
+    nRF.printDetails();
+    ladeni = 0;
   }
+
+  if (scan_rf_net_enable == 1)
+  {
+    scan_rf_network(scan_rf_net_channel);
+    scan_rf_net_channel++;
+    if (scan_rf_net_channel > 127)
+    {
+      stop_scan_rf_network();
+      scan_rf_network_public();
+    }
+  }
+
+
 
 
   /*
@@ -2225,7 +2332,7 @@ void loop()
   if (term_mode == TERM_MODE_OFF) led = led + LED_OFF;
   if (term_mode == TERM_MODE_MAX) led = led + LED_MAX;
   if (term_mode == TERM_MODE_PROG) led = led + LED_PROG;
-  if (term_mode == TERM_MODE_MAN) led = led + LED_UP + LED_DOWN;
+  if (term_mode == TERM_MODE_MAN_HEAT) led = led + LED_UP + LED_DOWN;
   if (term_mode == TERM_MODE_CLIMATE) led = led + LED_CLIMA;
 
   /// zapisuji do led registru pouze pri zmene
@@ -2277,7 +2384,7 @@ void loop()
     }
     if ((key == TL_UP) || (key == TL_DOWN))
     {
-      thermostat_set_ring_mode(0, TERM_MODE_MAN);
+      thermostat_set_ring_mode(0, TERM_MODE_MAN_HEAT);
       term_man.args3 = (thermostat_get_mezni(0) - 160) / 5;
       menu_set_root_menu(&term_man);
       delay_show_menu = 0;
@@ -2319,7 +2426,8 @@ void loop()
       }
       if (strcmp_P(curr_item, title_item_select_prog) == 0)
       {
-        setup_select_prog.args3 = thermostat_get_program_id(0) + 1;
+        setup_select_prog.args3 = thermostat_get_program_id(0);
+        if (setup_select_prog.args3 == 0) setup_select_prog.args3 = 1;
         menu_set_root_menu(&setup_select_prog);
         key = 0;
       }
@@ -2333,7 +2441,8 @@ void loop()
     }
   }
   /// konec hlavniho setup menu
-
+  /////////////////////////////////
+  /// menu vyber programu
   get_current_menu(curr_menu);
   get_current_item(curr_item);
   if (strcmp_P(curr_menu, title_item_select_prog) == 0)
@@ -2348,14 +2457,14 @@ void loop()
     }
     if (key == TL_OK)
     {
-      thermostat_set_program_id(0, setup_select_prog.args3 - 1);
+      thermostat_set_program_id(0, setup_select_prog.args3);
       menu_back_root_menu();
     }
   }
 
   /////////////////////////////
   //////////////////////////////////////////////////////////////////////////////////////////
-  /// menu vyber programu
+
   get_current_menu(curr_menu);
   get_current_item(curr_item);
   /// nastaveni jasu
@@ -2445,12 +2554,14 @@ void loop()
 
   ////////////////////
   /// kazdych 10sec
-  if ((milis - milis_10s) > 4500)
+  if ((milis - milis_10s) > 4540)
   {
     milis_10s = milis;
     send_mqtt_onewire();
     send_mqtt_status();
     send_mqtt_ring();
+    mereni_hwwire(1);
+    send_mqtt_tds();
     thermostat();
   }
 
@@ -2460,8 +2571,11 @@ void loop()
     milis_05s = milis;
     now = rtc.now();
     menu_display();
+    digitalWrite(LED, 1);
     if (last_sync < 200)
       last_sync++;
+
+
   }
 
 
@@ -2472,7 +2586,7 @@ void loop()
     delay_show_menu++;
     milis_1s = milis;
     uptime++;
-    mereni_hwwire(1);
+
 
     aktual_light = analogRead(LIGHT);
     itmp = (aktual_light / 4 / 15 * 15);
@@ -2481,11 +2595,39 @@ void loop()
       if (itmp > 240) itmp = 240;
       analogWrite(PWM_DISP, itmp);
     }
-    send_mqtt_tds();
+
+    if (scan_rf_net_enable == 0)
+    {
+      nRF.stopListening();
+      strcpy(nrf_send_data, "master ping");
+      nRF.write(nrf_send_data, strlen(nrf_send_data));
+      nRF.startListening();
+    }
 
   }
 
+
+
+  if (scan_rf_net_enable == 0)
+    if (nRF.available(&pipeno))
+    {
+      digitalWrite(LED, 0);
+      nrf_payload_len = nRF.getDynamicPayloadSize();
+      if (nrf_payload_len > 0)
+      {
+        nRF.read(&nrf_receive_data, nrf_payload_len);
+        nrf_receive_data[nrf_payload_len] = 0;
+        nRF.writeAckPayload(pipeno, nrf_receive_data, nrf_payload_len);
+        mqtt_client.publish("/data_prijem", nrf_receive_data);
+      }
+    }
+
 }
+
+
+
+
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2500,7 +2642,7 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
 
   milis++;
 
-  digitalWrite(LED, 0);
+
 
   digitalWrite(tr1, 1);
   digitalWrite(tr2, 1);
@@ -2558,15 +2700,74 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
 
 
   SREG = backup;
-  digitalWrite(LED, 1);
 }
 
 
 
+void start_scan_rf_network(void)
+{
+  scan_rf_net_enable = 1;
+  scan_rf_net_channel = 0;
+  for (uint8_t chan = 0; chan < 128; chan++) used_channels[chan] = 0;
+  //nRF.setAutoAck(false);
+  nRF.startListening();
+  nRF.stopListening();
+  for (uint8_t pipe = 1; pipe < 6; pipe++)
+    nRF.closeReadingPipe(pipe);
+
+}
+
+void scan_rf_network(uint8_t channel)
+{
+  uint8_t rep = 0;
+  if (channel < 128)
+  {
+    nRF.setChannel(channel);
+    while (rep < 128)
+    {
+
+      nRF.startListening();
+      delayMicroseconds(128);
+      nRF.stopListening();
+      if (nRF.testCarrier())
+        used_channels[channel]++;
+      rep++;
+    }
+  }
+}
+
+void stop_scan_rf_network(void)
+{
+  scan_rf_net_enable = 0;
+  scan_rf_net_channel = 0;
+  nRF.setChannel(device.nrf_channel);
+}
 
 
-
-
+void scan_rf_network_public(void)
+{
+  char topic[64];
+  char payload[128];
+  char tmp1[8];
+  char tmp2[8];
+  strcpy_P(topic, mqtt_header_out);
+  strcat(topic, device.nazev);
+  strcat(topic, "/rf/used");
+  for (uint8_t radek = 0; radek < 8; radek++)
+  {
+    itoa(radek, tmp1, 16);
+    strcpy(payload, "0x");
+    strcat(payload, tmp1);
+    strcat(payload, " :");
+    for (uint8_t sloupec = 0; sloupec < 16; sloupec++)
+    {
+      itoa(used_channels[(radek * 15) + sloupec], tmp1, 10);
+      strcat(payload, tmp1);
+      strcat(payload, " ");
+    }
+    mqtt_client.publish(topic, payload);
+  }
+}
 /*
 
   ////////////////////////////////////
