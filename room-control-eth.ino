@@ -1,15 +1,16 @@
-//#include <NTPClient.h>
+#include <PID_v1.h>
+
+#include <NTPClient.h>
 
 #include <ArduinoJson.h>
 
+#include <SPI.h>
+#include <PubSubClient.h>
+#include <UIPEthernet.h>
 
-//#include <PubSubClient.h>
-//#include <UIPEthernet.h>
-
-
-#include <nRF24L01.h>
-#include <RF24.h>
-#include <RF24_config.h>
+#include "nRF24L01.h"
+#include "RF24.h"
+#include "printf.h"
 
 #include <avr/pgmspace.h>
 #include "font_alfa.h"
@@ -84,7 +85,9 @@
 
 
 
-
+#define NRF_CE  29
+#define NRF_CS  28
+#define NRF_INT 30
 
 #define tr1  14
 #define tr2  15
@@ -106,10 +109,11 @@
 
 #define LIGHT A7
 
-#define NRF_CE 29
-#define NRF_CS 28
-#define NRF_IRQ 30 ///INT6
-
+/*
+  #define NRF_CE 29
+  #define NRF_CS 28
+  #define NRF_IRQ 30 ///INT6
+*/
 
 
 #define ETH_RST 2
@@ -222,10 +226,8 @@ typedef struct struct_my_device
   char mqtt_user[20];
   char mqtt_key[20];
   uint8_t ntp_server[4];
-  uint8_t nrf_channel;
 };
 
-#define nextfree 260
 #define device_nazev 260 /// 10
 #define device_mac 270  /// 6
 #define device_ip 276   /// 4
@@ -240,17 +242,40 @@ typedef struct struct_my_device
 #define nexxxxxt 342
 
 
+#define static_thermostat_program_1 500
+#define thermostat_program_idx_1 500
+#define thermostat_program_active_1 501
+#define thermostat_program_week_day_1 502
+#define thermostat_program_0_start_1 503
+#define thermostat_program_0_stop_1 504
+#define thermostat_program_0_mode_1 505
+#define thermostat_program_0_threshold_low 506
+#define thermostat_program_0_threshold_high 507
+#define thermostat_program_10_start_1 553
+#define thermostat_program_10_stop_1 557
+#define thermostat_program_name_1 558
+#define thermostat_program_free1_1 559
+
+#define static_thermostat_program_2 560
+#define static_thermostat_program_3 620
+
+
+
+
+
+
 
 //////////////////////////////////////////////////////////////
 RTC_DS1307 rtc;
 DateTime now;
 
-//EthernetClient ethClient;
-//EthernetUDP udpClient;
-//PubSubClient mqtt_client(ethClient);
-//NTPClient timeClient(udpClient);
+EthernetClient ethClient;
+EthernetUDP udpClient;
+PubSubClient mqtt_client(ethClient);
+NTPClient timeClient(udpClient);
 
-RF24 nRF(NRF_CE, NRF_CS);
+RF24 radio(NRF_CE, NRF_CS);
+
 
 
 struct_my_device device;
@@ -295,19 +320,21 @@ uint8_t start_at = 0;
 uint8_t re_at = 0;
 uint8_t r_id = 0;
 char uart_recv[UART_RECV_MAX_SIZE];
+char mqtt_log[128];
+uint8_t mqtt_log_cnt = 0;
 
-uint8_t ladeni = 0;
-uint8_t scan_rf_net_enable = 0;
-uint8_t scan_rf_net_channel = 0;
-
-byte adresaPrijimac[] = {0, 0, 0, 0, 1};
-byte adresaVysilac[] = {1, 0, 0, 0, 1};
-
-uint8_t used_channels[128];
-static char nrf_receive_data[32];
-static char nrf_send_data[32];
+byte nrf_addresses[][6] = {"1Node", "2Node"};
 
 uint8_t link_status;
+
+double PID_Input1, PID_Input2, PID_Input3;
+double PID_Output1, PID_Output2, PID_Output3;
+double PID_Setpoint1, PID_Setpoint2, PID_Setpoint3;
+
+PID pid1(&PID_Input1, &PID_Output1, &PID_Setpoint1, 2, 5, 1, DIRECT);
+PID pid2(&PID_Input2, &PID_Output2, &PID_Setpoint2, 2, 5, 1, DIRECT);
+PID pid3(&PID_Input3, &PID_Output3, &PID_Setpoint3, 2, 5, 1, DIRECT);
+
 
 /*
   const char at_term_light[] PROGMEM =  "term/light";
@@ -667,7 +694,6 @@ void set_tds18s20(uint8_t idx, struct_DDS18s20 *tds)
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void new_parse_at(char *input, char *out1, char *out2)
 {
-
   uint8_t count = 0;
   uint8_t q = 0;
   out1[0] = 0;
@@ -1034,37 +1060,6 @@ void thermostat_set_status(uint8_t idx, uint8_t stav)
   therm_stav[idx] = stav;
 }
 
-
-////////////////////////////////////////////////////////////////////////////////////////
-///////// globalni termostat mode
-/*
-  uint8_t thermostat_get_mode(void)
-  {
-  term_mode = EEPROM.read(eeprom_term_mode);
-  return term_mode;
-  }
-
-  void thermostat_set_mode(uint8_t in)
-  {
-  term_mode = in;
-  EEPROM.write(eeprom_term_mode, term_mode);
-  }
-  /*
-  /*
-  //////// seznam vsech dostupnych programu
-  void thermostat_get_availability_program(void)
-  {
-  max_program = EEPROM.read(dostupny_program0) | EEPROM.read(dostupny_program1) << 8 | EEPROM.read(dostupny_program2) << 16 | EEPROM.read(dostupny_program3) << 24;
-  }
-  void thermostat_set_availability_program(void)
-  {
-  EEPROM.write(dostupny_program0, max_program & 0xff);
-  EEPROM.write(dostupny_program1, (max_program >> 8) & 0xff);
-  EEPROM.write(dostupny_program2, (max_program >> 16) & 0xff);
-  EEPROM.write(dostupny_program3, (max_program >> 24) & 0xff);
-  }
-*/
-
 //// nastaveni programu k ringu termostatu
 uint8_t thermostat_get_program_id(uint8_t idx)
 {
@@ -1342,23 +1337,8 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
 
   //// /thermctl/global/ping - test spojeni
 
-  //// /thermctl-in/XXXX/rf/scan - 0|1 zapnuti/vypnuti scanovani rf site
-  strcpy_P(str1, mqtt_header_in);
-  strcat(str1, device.nazev);
-  strcat(str1, "/rf/scan");
-  if (strcmp(str1, topic) == 0)
-  {
-    if (atoi(payload) == 1)
-    {
 
-      start_scan_rf_network();
-    }
-    else
-    {
-      stop_scan_rf_network();
-      scan_rf_network_public();
-    }
-  }
+
   ///////////////
   //// /thermctl-in/XXXX/tds/associate - asociace do tds si pridam mac 1wire - odpoved je pod jakem ID to mam ulozeno
   strcpy_P(str1, mqtt_header_in);
@@ -1463,9 +1443,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   {
     EEPROM.write(set_default_values, 255);
   }
-
 }
-
 ////////////////////////////////////////////////////////////////////////////////////////////
 void send_mqtt_status(void)
 {
@@ -1479,7 +1457,6 @@ void send_mqtt_status(void)
     strcat(str_topic, "/status/uptime");
     itoa(uptime, payload, 10);
     mqtt_client.publish(str_topic, payload);
-
 
     strcpy_P(str_topic, mqtt_header_out);
     strcat(str_topic, device.nazev);
@@ -1495,13 +1472,29 @@ void mqtt_publis_output(uint8_t idx, uint8_t state)
   char payload[64];
   char str1[8];
   strcpy_P(str_topic, mqtt_header_out);
+  strcat(str_topic, device.nazev);
   strcat(str_topic, "power-output/");
   itoa(idx, str1, 10);
   strcat(str_topic, str1);
   strcat(str_topic, "/state");
   itoa(state, payload, 10);
   mqtt_client.publish(str_topic, payload);
-
+}
+//////////////////////////////////////////////////////
+///////////////////////////
+void mqtt_publis_output_pwm(uint8_t idx, uint8_t pwm)
+{
+  char str_topic[64];
+  char payload[64];
+  char str1[8];
+  strcpy_P(str_topic, mqtt_header_out);
+  strcat(str_topic, device.nazev);
+  strcat(str_topic, "power-output/");
+  itoa(idx, str1, 10);
+  strcat(str_topic, str1);
+  strcat(str_topic, "/pwm");
+  itoa(pwm, payload, 10);
+  mqtt_client.publish(str_topic, payload);
 }
 //////////////////////////////////////////////////////
 boolean mqtt_reconnect(void)
@@ -1523,8 +1516,6 @@ boolean mqtt_reconnect(void)
   return ret;
 }
 ////////////////////////////////////////////////////////
-
-
 /////vyhledani zarizeni na hw 1wire sbernici////////
 uint8_t one_hw_search_device(uint8_t idx)
 {
@@ -1620,41 +1611,179 @@ uint8_t mereni_hwwire(uint8_t maxidx = 2)
   }
   return status;
 }
+//// ziska pojmenovani programu
+void get_thermostat_program_name(uint8_t idx, char *name)
+{
+  uint8_t t = 0;
+  for (uint8_t i = 0; i < 9; i++)
+  {
+    t = EEPROM.read(thermostat_program_name_1 + (idx * 60) + i);
+    name[i] = t;
+    if (t == 0) break;
+  }
+}
+//// nastavi pojmenovani programu
+void set_thermostat_program_name(uint8_t idx, char *name)
+{
+  for (uint8_t i = 0; i < 9; i++)
+  {
+    EEPROM.write(thermostat_program_name_1 + (idx * 60) + i, name[i]);
+    if (name[i] == 0) break;
+  }
+}
 
+//// zjisti program status
+uint8_t get_thermostat_program_status(uint8_t idx)
+{
+  return EEPROM.read(thermostat_program_active_1 + (idx * 60));
+}
+
+//// nastavi program status
+void set_thermostat_program_status(uint8_t idx, uint8_t status)
+{
+  EEPROM.write(thermostat_program_active_1 + (idx * 60), status);
+}
+
+//// ziska jaky se aktualne pouziva program
+uint8_t get_thermostat_program_what_progid(uint8_t idx)
+{
+  return EEPROM.read(thermostat_program_idx_1 + (idx * 60));
+}
+
+//// nastavi jaky se aktualne pouziva program
+void set_thermostat_program_what_progid(uint8_t idx, uint8_t progid)
+{
+  EEPROM.write(thermostat_program_idx_1 + (idx * 60), progid);
+}
+
+//// ziska cas termostatu
+void get_thermostat_program_time(uint8_t idx, uint8_t progid, uint8_t *start_hour, uint8_t *start_min, uint8_t *stop_hour, uint8_t *stop_min)
+{
+  uint8_t start = EEPROM.read(thermostat_program_0_start_1 + (idx * 60) + 3 + (progid * 6));
+  uint8_t stop = EEPROM.read(thermostat_program_0_stop_1 + (idx * 60) + 4 + (progid * 6));
+  *start_hour = (start >> 3) & 0b00011111;
+  *start_min = (start & 0b00000111) * 15;
+  *stop_hour = (stop >> 3) & 0b00011111;
+  *stop_min = (stop & 0b00000111) * 15;
+}
+
+//// nastavi cas termostatu
+void set_thermostat_program_time(uint8_t idx, uint8_t progid, uint8_t start_hour, uint8_t start_min, uint8_t stop_hour, uint8_t stop_min)
+{
+  uint8_t start, stop;
+  start = (start_hour << 3) + (start_min / 15);
+  stop = (stop_hour << 3) + (stop_min / 15);
+  EEPROM.write(thermostat_program_0_start_1 + (idx * 60) + 3 + (progid * 6), start);
+  EEPROM.write(thermostat_program_0_stop_1 + (idx * 60) + 4 + (progid * 6), stop);
+}
+
+//// ziska mod termostatu topi/chladi
+uint8_t get_thermostat_program_mode(uint8_t idx, uint8_t progid)
+{
+  return EEPROM.read(thermostat_program_0_mode_1 + (idx * 60));
+}
+
+//// nastavi mod termostatu topi/chladi
+void set_thermostat_program_mode(uint8_t idx, uint8_t progid, uint8_t mode)
+{
+  EEPROM.write(thermostat_program_0_mode_1 + (idx * 60), mode);
+}
+
+//// ziska rozhodovaci uroven termostatu
+uint16_t get_thermostat_program_threshold(uint8_t idx, uint8_t progid)
+{
+  return  EEPROM.read(thermostat_program_0_threshold_high + (idx * 60) + (progid * 6)) << 8  + EEPROM.read(thermostat_program_0_threshold_low + (idx * 60) + (progid * 6));
+}
+
+//// nastavi rozhodovaci uroven termostatu
+void set_thermostat_program_threshold(uint8_t idx, uint8_t progid, uint8_t mode, uint16_t threshold)
+{
+  EEPROM.write(thermostat_program_0_threshold_high + (idx * 60) + (progid * 6), ((threshold >> 8) & 0xff));
+  EEPROM.write(thermostat_program_0_threshold_low + (idx * 60) + (progid * 6), (threshold & 0xff));
+}
+
+//// vraci 1 pokud je termostat aktivni
+uint8_t thermostat_running(uint8_t ring_id, uint8_t *mode, uint16_t *threshold)
+{
+  uint8_t ret = 0;
+  uint8_t start_hour, start_min, stop_hour, stop_min;
+  for (uint8_t idx = 0; idx < 10; idx++)
+  {
+    get_thermostat_program_time(ring_id, idx, &start_hour, &start_min, &stop_hour, &stop_min);
+    if (start_hour >= now.hour() && start_min >= now.minute() && stop_hour <= now.hour() && stop_min <= now.minute())
+    {
+      *mode = get_thermostat_program_mode(ring_id, idx);
+      *threshold = get_thermostat_program_threshold(ring_id, idx);
+      ret = 1;
+      break;
+    }
+  }
+  return ret;
+}
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
 void thermostat(void)
 {
   uint8_t tdsid = 0;
   uint8_t tmode = 0;
   uint8_t tout = 0;
+  uint16_t thresh = 0;
+  uint8_t pwm = 0;
   struct_DDS18s20 tds;
   for (uint8_t tix = 0; tix < MAX_THERMOSTAT; tix++)
   {
     tdsid = thermostat_get_asociate_tds(tix);
     tmode = thermostat_get_ring_mode(tix);
     tout = thermostat_get_output(tix);
-    if (tmode == TERM_MODE_OFF)
-    {
-      mqtt_publis_output(tout, POWER_OUTPUT_OFF);
-    }
-    if (tmode == TERM_MODE_MAX)
-    {
-      mqtt_publis_output(tout, POWER_OUTPUT_MAX);
-    }
+    thresh = thermostat_get_mezni(tix);
 
     if (tmode == TERM_MODE_MAN_HEAT)
     {
-      if (get_tds18s20(tdsid, &tds) == 1)
-        if (tds.used == 1) if (status_tds18s20[tdsid].online == True)
-            if (status_tds18s20[tdsid].temp );
+      if (tix == 0)
+      {
+        pid1.SetControllerDirection(DIRECT);
+        if (get_tds18s20(tdsid, &tds) == 1)if (tds.used == 1) if (status_tds18s20[tdsid].online == True)
+              PID_Input1 = status_tds18s20[tdsid].temp;
+        PID_Setpoint1 = thresh;
+        pwm = PID_Output1;
+      }
+      if (tix == 1)
+      {
+        pid2.SetControllerDirection(DIRECT);
+        if (get_tds18s20(tdsid, &tds) == 1)if (tds.used == 1) if (status_tds18s20[tdsid].online == True)
+              PID_Input2 = status_tds18s20[tdsid].temp;
+        PID_Setpoint2 = thresh;
+        pwm = PID_Output2;
+      }
+      if (tix == 2)
+      {
+        pid3.SetControllerDirection(DIRECT);
+        if (get_tds18s20(tdsid, &tds) == 1)if (tds.used == 1) if (status_tds18s20[tdsid].online == True)
+              PID_Input3 = status_tds18s20[tdsid].temp;
+        PID_Setpoint3 = thresh;
+        pwm = PID_Output3;
+      }
     }
 
+    if (tout != 255)
+    {
+      if (tmode == TERM_MODE_OFF)
+      {
+        mqtt_publis_output(tout, POWER_OUTPUT_OFF);
+      }
+      if (tmode == TERM_MODE_MAX)
+      {
+        mqtt_publis_output(tout, POWER_OUTPUT_MAX);
+      }
+      if (tmode == TERM_MODE_MAN_HEAT)
+      {
+        mqtt_publis_output_pwm(tout, pwm);
+      }
+    }
   }
 }
+////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
-char mqtt_log[128];
-uint8_t mqtt_log_cnt = 0;
 
 
 int printf_via_mqtt( char c, FILE *t)
@@ -1671,7 +1800,12 @@ int printf_via_mqtt( char c, FILE *t)
 
 }
 
-
+/*
+  void nrf_irq_set(void)
+  {
+  nrf_interupt_enable = 1;
+  }
+*/
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1680,9 +1814,7 @@ void setup(void) {
   char tmp2[20];
   uint8_t itmp;
   boolean bol;
-  uint8_t devnull[2]
-  ;
-  device.nrf_channel = 100;
+
 
   fdevopen( &printf_via_mqtt, 0);
 
@@ -1749,9 +1881,10 @@ void setup(void) {
 
 
 
-  pinMode(NRF_IRQ, INPUT);
-  pinMode(NRF_CE, OUTPUT);
-  pinMode(NRF_CS, OUTPUT);
+  //pinMode(NRF_IRQ, INPUT);
+  //digitalWrite(NRF_IRQ, HIGH);
+  //pinMode(NRF_CE, OUTPUT);
+  //pinMode(NRF_CS, OUTPUT);
 
   pinMode(ETH_RST, OUTPUT);
   digitalWrite(ETH_RST, LOW);
@@ -1777,6 +1910,9 @@ void setup(void) {
   noInterrupts();           // disable all interrupts
   //pinMode(ETH_INT, INPUT_PULLUP);
 
+
+  pinMode(NRF_CE, OUTPUT);
+  pinMode(NRF_CS, OUTPUT);
 
   pinMode(LED, OUTPUT);
 
@@ -1820,10 +1956,21 @@ void setup(void) {
   //TCCR0B = TCCR0B & 0b11111000 | 0x02;
   //TCCR1B = TCCR1B & 0b11111000 | 0x02;
 
-  interrupts();             // enable all interrupts
+  /*
+    while(1)
+    {
+    digitalWrite(NRF_CE, 0);
+    digitalWrite(NRF_CE, 1);
+    //digitalWrite(NRF_CS, 0);
+    //digitalWrite(NRF_CS, 1);
+    }
+  */
 
+  interrupts();             // enable all interrupts
+  SPI.begin();
   rtc.begin();
 
+  printf_begin();
 
 
 
@@ -1909,7 +2056,6 @@ void setup(void) {
 
     if (inic == 3)
     {
-
       itoa(ds2482_address[0].i2c_addr, tmp1, 10);
       if (ds2482reset(ds2482_address[0].i2c_addr) == DS2482_ERR_OK)
       {
@@ -1970,33 +2116,20 @@ void setup(void) {
 
     if (inic == 7)
     {
-      strcpy(tmp1, "I7-NRF");
+      strcpy(tmp1, "I7-PID");
       show_direct(tmp1);
-
-      if (nRF.begin())
-      {
-        nRF.setPALevel(RF24_PA_LOW);
-        nRF.setChannel(device.nrf_channel);
-        nRF.enableAckPayload();
-        nRF.enableDynamicPayloads();
-        //nRF.setRetries(50, 50);
-        for (uint8_t pipe = 0; pipe < 6; pipe++)
-          nRF.closeReadingPipe(pipe);
-        nRF.openWritingPipe(adresaVysilac);
-        nRF.openReadingPipe(1, adresaPrijimac);
-
-        nRF.powerDown();
-        nRF.stopListening();
-        nRF.startListening();
-        nRF.powerUp();
-        nRF.writeAckPayload(1, &devnull, sizeof(devnull));
-      }
-      else
-      {
-        strcpy(tmp1, "NRFERR");
-        show_direct(tmp1);
-        delay(1000);
-      }
+      PID_Input1 = 0;
+      PID_Input2 = 0;
+      PID_Input3 = 0;
+      PID_Output1 = 0;
+      PID_Output2 = 0;
+      PID_Output3 = 0;
+      PID_Setpoint1 = 0;
+      PID_Setpoint2 = 0;
+      PID_Setpoint3 = 0;
+      pid1.SetOutputLimits(0, 10);
+      pid2.SetOutputLimits(0, 10);
+      pid3.SetOutputLimits(0, 10);
     }
 
     if (inic == 8)
@@ -2062,14 +2195,23 @@ void setup(void) {
       timeClient.end();
     }
 
-
-    if (inic == 13)
-    {
-      strcpy(tmp1, "I13NPP");
+    /*
+      if (inic == 13)
+      {
+      strcpy(tmp1, "I NRF");
       show_direct(tmp1);
-      ladeni = ladeni + 1;
-      delay(1000);
-    }
+      radio.begin();
+      radio.enableAckPayload();                     // Allow optional ack payloads
+      radio.enableDynamicPayloads();                // Ack payloads are dynamic payload
+      radio.openWritingPipe(nrf_addresses[1]);
+      radio.openReadingPipe(1, nrf_addresses[0]);
+      radio.startListening();
+      radio.setPALevel(RF24_PA_HIGH);
+      uint8_t counter;
+      radio.writeAckPayload(1, &counter, 1);
+      radio.printDetails();
+      }
+    */
 
     if (inic == 14)
     {
@@ -2201,6 +2343,14 @@ uint8_t Bit_Reverse( uint8_t x )
 
 ///potreba udelat
 /*
+
+  0. hw problem zvlnene napeti
+
+  1. kalibraci tlacitek
+  2. podsviceni tlacitek
+
+
+
 */
 
 
@@ -2216,8 +2366,8 @@ void loop()
   char cmd[MAX_TEMP_BUFFER];
   char args[MAX_TEMP_BUFFER];
   struct_DDS18s20 tds;
-  uint8_t pipeno;
-  uint8_t nrf_payload_len;
+  //uint8_t pipeno;
+  //uint8_t nrf_payload;
 
 
   if ( Enc28J60Network::linkStatus() == 1)
@@ -2237,25 +2387,23 @@ void loop()
     mqtt_client.disconnect();
 
 
-  if (ladeni > 0)
-  {
-    nRF.printDetails();
-    ladeni = 0;
-  }
+  pid1.Compute();
+  pid2.Compute();
+  pid3.Compute();
 
-  if (scan_rf_net_enable == 1)
-  {
-    scan_rf_network(scan_rf_net_channel);
-    scan_rf_net_channel++;
-    if (scan_rf_net_channel > 127)
+  /*
+    //radio.startListening();
+    if (radio.testRPD() == 1) printf("RPD signal ok %d\n\r");
+
+    if ( radio.available(&pipeno))
     {
-      stop_scan_rf_network();
-      scan_rf_network_public();
+    radio.read( &nrf_payload, 1 );
+    // Since this is a call-response. Respond directly with an ack payload.
+    nrf_payload += 1;                                // Ack payloads are much more efficient than switching to transmit mode to respond to a call
+    radio.writeAckPayload(pipeno, &nrf_payload, 1 ); // This can be commented out to send empty payloads.
+    printf("Loaded next response %d\n\r", nrf_payload);
     }
-  }
-
-
-
+  */
 
   /*
     read_at(uart_recv);
@@ -2332,8 +2480,9 @@ void loop()
   if (term_mode == TERM_MODE_OFF) led = led + LED_OFF;
   if (term_mode == TERM_MODE_MAX) led = led + LED_MAX;
   if (term_mode == TERM_MODE_PROG) led = led + LED_PROG;
-  if (term_mode == TERM_MODE_MAN_HEAT) led = led + LED_UP + LED_DOWN;
+  if (term_mode == TERM_MODE_MAN_HEAT) led = led + LED_MAX + LED_UP + LED_DOWN;
   if (term_mode == TERM_MODE_CLIMATE) led = led + LED_CLIMA;
+  if (term_mode == TERM_MODE_MAN_COOL) led = led + LED_CLIMA + LED_UP + LED_DOWN;
 
   /// zapisuji do led registru pouze pri zmene
   if (led != led_old)
@@ -2574,8 +2723,6 @@ void loop()
     digitalWrite(LED, 1);
     if (last_sync < 200)
       last_sync++;
-
-
   }
 
 
@@ -2587,7 +2734,6 @@ void loop()
     milis_1s = milis;
     uptime++;
 
-
     aktual_light = analogRead(LIGHT);
     itmp = (aktual_light / 4 / 15 * 15);
     if (jas_disp == 0) // Automatika
@@ -2595,32 +2741,11 @@ void loop()
       if (itmp > 240) itmp = 240;
       analogWrite(PWM_DISP, itmp);
     }
-
-    if (scan_rf_net_enable == 0)
-    {
-      nRF.stopListening();
-      strcpy(nrf_send_data, "master ping");
-      nRF.write(nrf_send_data, strlen(nrf_send_data));
-      nRF.startListening();
-    }
-
   }
 
 
 
-  if (scan_rf_net_enable == 0)
-    if (nRF.available(&pipeno))
-    {
-      digitalWrite(LED, 0);
-      nrf_payload_len = nRF.getDynamicPayloadSize();
-      if (nrf_payload_len > 0)
-      {
-        nRF.read(&nrf_receive_data, nrf_payload_len);
-        nrf_receive_data[nrf_payload_len] = 0;
-        nRF.writeAckPayload(pipeno, nrf_receive_data, nrf_payload_len);
-        mqtt_client.publish("/data_prijem", nrf_receive_data);
-      }
-    }
+
 
 }
 
@@ -2704,8 +2829,117 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
 
 
 
-void start_scan_rf_network(void)
-{
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*
+
+     if (ladeni > 0)
+  {
+    nRF.printDetails();
+    ladeni = 0;
+  }
+
+  if (scan_rf_net_enable == 1)
+  {
+    scan_rf_network(scan_rf_net_channel);
+    scan_rf_net_channel++;
+    if (scan_rf_net_channel > 127)
+    {
+      stop_scan_rf_network();
+      scan_rf_network_public();
+    }
+  }
+
+  //  if (nrf_interupt_enable == 1)
+  //  {
+  //    nrf_interupt_enable  = 0;
+    nrf_irq_runtime();
+  //  }
+
+       if (scan_rf_net_enable == 0)
+    {
+      nRF.stopListening();
+      strcpy(nrf_send_data, "master ping");
+      nRF.write(nrf_send_data, strlen(nrf_send_data));
+      //nrf_interupt_enable = 1;
+      digitalWrite(LED, 0);
+      nRF.startListening();
+    }
+
+     if (scan_rf_net_enable == 0)
+    if (nRF.available(&pipeno))
+    {
+      nrf_payload_len = nRF.getDynamicPayloadSize();
+      if (nrf_payload_len > 0)
+      {
+        nRF.read(&nrf_receive_data, nrf_payload_len);
+        nrf_receive_data[nrf_payload_len] = 0;
+        nRF.writeAckPayload(pipeno, nrf_receive_data, nrf_payload_len);
+        mqtt_client.publish("/data_prijem", nrf_receive_data);
+      }
+    }
+
+
+     //// /thermctl-in/XXXX/rf/scan - 0|1 zapnuti/vypnuti scanovani rf site
+  strcpy_P(str1, mqtt_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/rf/scan");
+  if (strcmp(str1, topic) == 0)
+  {
+    if (atoi(payload) == 1)
+    {
+
+      start_scan_rf_network();
+    }
+    else
+    {
+      stop_scan_rf_network();
+      scan_rf_network_public();
+    }
+  }
+  ///// //thermctl-in/XXXX/rf/stat - statisticke informace
+  strcpy_P(str1, mqtt_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/rf/stat");
+  {
+    ladeni = ladeni + 1;
+  }
+
+
+  void start_scan_rf_network(void)
+  {
   scan_rf_net_enable = 1;
   scan_rf_net_channel = 0;
   for (uint8_t chan = 0; chan < 128; chan++) used_channels[chan] = 0;
@@ -2715,10 +2949,10 @@ void start_scan_rf_network(void)
   for (uint8_t pipe = 1; pipe < 6; pipe++)
     nRF.closeReadingPipe(pipe);
 
-}
+  }
 
-void scan_rf_network(uint8_t channel)
-{
+  void scan_rf_network(uint8_t channel)
+  {
   uint8_t rep = 0;
   if (channel < 128)
   {
@@ -2734,18 +2968,18 @@ void scan_rf_network(uint8_t channel)
       rep++;
     }
   }
-}
+  }
 
-void stop_scan_rf_network(void)
-{
+  void stop_scan_rf_network(void)
+  {
   scan_rf_net_enable = 0;
   scan_rf_net_channel = 0;
   nRF.setChannel(device.nrf_channel);
-}
+  }
 
 
-void scan_rf_network_public(void)
-{
+  void scan_rf_network_public(void)
+  {
   char topic[64];
   char payload[128];
   char tmp1[8];
@@ -2767,7 +3001,9 @@ void scan_rf_network_public(void)
     }
     mqtt_client.publish(topic, payload);
   }
-}
+  }
+*/
+
 /*
 
   ////////////////////////////////////
@@ -3067,4 +3303,37 @@ void scan_rf_network_public(void)
   ret = 1;
   return ret;
   }
+*/
+
+
+
+/*
+
+
+
+      if (nRF.begin())
+      {
+        nRF.setChannel(device.nrf_channel);
+        nRF.enableAckPayload();
+        nRF.enableDynamicPayloads();
+        //nRF.setRetries(50, 50);
+        for (uint8_t pipe = 1; pipe < 6; pipe++)
+          nRF.closeReadingPipe(pipe);
+
+        nRF.openWritingPipe(addresses[1]);        // Both radios listen on the same pipes by default, but opposite addresses
+        nRF.openReadingPipe(1, addresses[0]);     // Open a reading pipe on address 0, pipe 1
+
+
+        nRF.startListening();                       // Start listening
+        nRF.setPALevel(RF24_PA_HIGH);
+        nRF.writeAckPayload(1, &devnull, sizeof(devnull));        // Pre-load an ack-paylod into the FIFO buffer for pipe 1
+        //radio.printDetails();
+      }
+      else
+      {
+        strcpy(tmp1, "NRFERR");
+        show_direct(tmp1);
+        delay(1000);
+      }
+   /
 */
