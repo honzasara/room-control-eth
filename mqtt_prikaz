@@ -3,3 +3,5 @@ mosquitto_pub -t "/thermctl-in/global/time/ntp" -m "yes";
 mosquitto_pub -t "/thermctl-in/TERM E1/tds/set/1/clear" -m "yes";
 
 mosquitto_pub -t "/thermctl-in/TERM E1/tds/associate" -m "0"
+
+mosquitto_pub -t "/thermctl-in/global/time/set" -m '{"year":2019, "month":12, "day":28, "hour":21, "minute":40, "second":44}'
