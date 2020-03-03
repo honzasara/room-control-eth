@@ -200,7 +200,6 @@ struct struct_ds2482
 {
   uint8_t i2c_addr;
   uint8_t HWwirenum;
-  uint8_t hwwire_cekam;
 };
 
 struct struct_1w_rom
@@ -217,6 +216,7 @@ typedef struct struct_DDS18s20
   uint8_t assigned_ds2482;
   int offset;
   char name[8];
+  uint8_t period;
 };
 
 typedef struct struct_status_DDS18s20
@@ -229,6 +229,8 @@ typedef struct struct_status_DDS18s20
   int temp;
   int average_temp[10];
   uint8_t online;
+  uint8_t period_now;
+  uint8_t wait;
 };
 
 typedef void (*function)(uint8_t args, uint8_t *ret, char *tmp);
@@ -351,7 +353,10 @@ typedef struct struct_my_device
 #define light_output_0 1316
 #define light_output_7 1323
 
-///define next 1324
+#define tds_period1 1324
+#define tds_period4 1328
+
+///define next 1329
 
 //////////////////////////////////////////////////////////////
 RTC_DS1307 rtc;
@@ -980,6 +985,7 @@ uint8_t get_tds18s20(uint8_t idx, struct_DDS18s20 *tds)
     }
     tds->assigned_ds2482 = EEPROM.read(wire_know_rom_0 + (idx * 20) + 9);
     tds->offset = (EEPROM.read(wire_know_rom_0 + (idx * 20) + 10) << 8) + EEPROM.read(wire_know_rom_0 + (idx * 20) + 11);
+    tds->period = EEPROM.read(tds_period1 + idx);
     ret = 1;
   }
   return ret;
@@ -996,6 +1002,7 @@ void set_tds18s20(uint8_t idx, struct_DDS18s20 *tds)
   EEPROM.write(wire_know_rom_0 + (idx * 20) + 9, tds->assigned_ds2482 );
   EEPROM.write(wire_know_rom_0 + (idx * 20) + 10, (tds->offset >> 8) & 0xff);
   EEPROM.write(wire_know_rom_0 + (idx * 20) + 11, (tds->offset) & 0xff);
+  EEPROM.write(tds_period1 + idx, tds->period);
 }
 
 //// ziska nazev tds cidla
@@ -1022,12 +1029,29 @@ void tds_set_offset(uint8_t idx, int offset)
   set_tds18s20(idx, &tds);
 }
 //// funkce ziska offset cidlu tds
-int tds_get_offset(uint8_t idx, int offset)
+int tds_get_offset(uint8_t idx)
 {
   struct_DDS18s20 tds;
   get_tds18s20(idx, &tds);
   return tds.offset;
 }
+///////
+//// funkce nastavi periodu mereni
+void tds_set_period(uint8_t idx, uint8_t period)
+{
+  struct_DDS18s20 tds;
+  get_tds18s20(idx, &tds);
+  tds.period = period;
+  set_tds18s20(idx, &tds);
+}
+//// funkce ziska periodu mereni
+int tds_get_period(uint8_t idx)
+{
+  struct_DDS18s20 tds;
+  get_tds18s20(idx, &tds);
+  return tds.period;
+}
+
 //// funkce vymaze associovane 1wire -> tds
 void tds_set_clear(uint8_t idx)
 {
@@ -1706,6 +1730,7 @@ void send_mqtt_onewire(void)
 //// /thermctl-out/XXXXX/tds/ID/offset
 //// /thermctl-out/XXXXX/tds/ID/online
 //// /thermctl-out/XXXXX/tds/ID/rom
+//// /thermctl-out/XXXXX/tds/ID/period
 void send_mqtt_tds(void)
 {
   struct_DDS18s20 tds;
@@ -1719,20 +1744,20 @@ void send_mqtt_tds(void)
           tt = status_tds18s20[id].temp / 10;
           itoa(tt, payload, 10);
           send_mqtt_message_prefix_id_topic_payload("tds", id, "temp", payload);
-
           strcpy(payload, tds.name);
           send_mqtt_message_prefix_id_topic_payload("tds", id, "name", payload);
-
           tt = tds.offset;
           itoa(tt, payload, 10);
           send_mqtt_message_prefix_id_topic_payload("tds", id, "offset", payload);
-
           tt = status_tds18s20[id].online;
           itoa(tt, payload, 10);
           send_mqtt_message_prefix_id_topic_payload("tds", id, "online", payload);
           payload[0] = 0;
           createString(payload, ':', tds.rom, 8, 16);
           send_mqtt_message_prefix_id_topic_payload("tds", id, "rom", payload);
+          tt = tds.period;
+          itoa(tt, payload, 10);
+          send_mqtt_message_prefix_id_topic_payload("tds", id, "period", payload);
         }
 }
 ///
@@ -2116,6 +2141,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   ///
   //// /thermctl-in/XXXX/tds/set/IDcko/name - nastavi cidlu nazev
   //// /thermctl-in/XXXX/tds/set/IDcko/offset
+  //// /thermctl-in/XXXX/tds/set/IDcko/period
   strcpy_P(str1, thermctl_header_in);
   strcat(str1, device.nazev);
   strcat(str1, "/tds/set/");
@@ -2138,6 +2164,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       {
         if ((cnt == 1) && (strcmp(pch, "name") == 0)) tds_set_name(id, str2);
         if ((cnt == 1) && (strcmp(pch, "offset") == 0)) tds_set_offset(id, atoi(str2));
+        if ((cnt == 1) && (strcmp(pch, "period") == 0)) tds_set_period(id, atoi(str2));
       }
       else
       {
@@ -2711,8 +2738,9 @@ uint8_t one_hw_search_device(uint8_t idx)
   return r;
 }
 /// funkce mereni na sbernici
-uint8_t mereni_hwwire(uint8_t maxidx = 2)
-{
+/*
+  uint8_t mereni_hwwire(uint8_t maxidx = 2)
+  {
   uint8_t status = 0;
   uint8_t t, e;
   struct_DDS18s20 tds;
@@ -2770,7 +2798,76 @@ uint8_t mereni_hwwire(uint8_t maxidx = 2)
       }
   }
   return status;
+  }
+*/
+
+uint8_t mereni_hwwire(void)
+{
+  uint8_t status = 0;
+  uint8_t t, e;
+  struct_DDS18s20 tds;
+
+  for (uint8_t w = 0; w < HW_ONEWIRE_MAXROMS; w++)
+  {
+    get_tds18s20(w, &tds);
+    if (tds.used == 1)
+    {
+      if ((status_tds18s20[w].wait == false) && ((uptime - status_tds18s20[w].period_now) > tds.period))
+      {
+        owReset(tds.assigned_ds2482);
+        owMatchRom(tds.assigned_ds2482, tds.rom );
+        owWriteByte(tds.assigned_ds2482, OW_CONVERT_T);
+        status_tds18s20[w].period_now = uptime;
+        status_tds18s20[w].wait = true;
+      }
+      if (status_tds18s20[w].wait == true)
+      {
+        owReset(tds.assigned_ds2482);
+        owMatchRom(tds.assigned_ds2482, tds.rom );
+        owReadByte(tds.assigned_ds2482, &t);
+        if (t != 0)
+        {
+          status_tds18s20[w].wait = false;
+          status = owReset(tds.assigned_ds2482);
+          status = status + owMatchRom(tds.assigned_ds2482, tds.rom );
+          status = status + owWriteByte(tds.assigned_ds2482, OW_READ_SCRATCHPAD);
+          status = status + owReadByte(tds.assigned_ds2482, &e);     //0byte
+          status_tds18s20[w].tempL = e;
+          status = status + owReadByte(tds.assigned_ds2482, &e);     //1byte
+          status_tds18s20[w].tempH = e;
+          status = status + owReadByte(tds.assigned_ds2482, &e); //2byte
+          status = status + owReadByte(tds.assigned_ds2482, &e); //3byte
+          status = status + owReadByte(tds.assigned_ds2482, &e); //4byte
+          status = status + owReadByte(tds.assigned_ds2482, &e); //5byte
+          status = status + owReadByte(tds.assigned_ds2482, &e); //6byte
+          status_tds18s20[w].CR = e; //count remain
+          status = status + owReadByte(tds.assigned_ds2482, &e); //7byte
+          status_tds18s20[w].CP = e; // count per
+          status = status + owReadByte(tds.assigned_ds2482, &e); //8byte
+          status_tds18s20[w].CRC = e; // crc soucet
+          if (status == 0)
+          {
+            uint16_t temp = (uint16_t) status_tds18s20[w].tempH << 11 | (uint16_t) status_tds18s20[w].tempL << 3;
+            status_tds18s20[w].temp = ((temp & 0xfff0) << 3) -  16 + (  (  (status_tds18s20[w].CP - status_tds18s20[t].CR) << 7 ) / status_tds18s20[w].CP ) + tds.offset;
+            status_tds18s20[w].online = True;
+            for (uint8_t av = 9; av > 0; av--) status_tds18s20[w].average_temp[av] = status_tds18s20[w].average_temp[av - 1];
+            status_tds18s20[w].average_temp[0] = status_tds18s20[w].temp;
+          }
+          else
+          {
+            status_tds18s20[w].online = False;
+          }
+        }
+
+      }
+
+
+    }
+  }
+
 }
+
+
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /*************************************************************************************************************************************************/
 ///   NASTAVENI PID REGULATORU ///
@@ -3230,8 +3327,11 @@ void setup(void)
 
   ds2482_address[0].i2c_addr = 0b0011000;
   ds2482_address[0].HWwirenum = 0;
-  ds2482_address[0].hwwire_cekam = false;
 
+  for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXROMS; idx++ )
+  {
+    status_tds18s20[idx].wait = false;
+  }
 
 
   noInterrupts();           // disable all interrupts
@@ -3343,6 +3443,7 @@ void setup(void)
           tds.used = 0;
           tds.offset = 0;
           tds.assigned_ds2482 = 0;
+          tds.period = 10;
           set_tds18s20(idx, &tds);
         }
 
@@ -3386,7 +3487,7 @@ void setup(void)
       analogWrite(PWM_KEY, jas_key);
       pid_load_variable();
       default_ring = get_default_ring();
-      for (uint8_t idx = 0; idx < MAX_SVETEL; idx++) 
+      for (uint8_t idx = 0; idx < MAX_SVETEL; idx++)
       {
         light_value[idx] = LIGHT_DEFAULT;
         light_state[idx] = LIGHT_DEFAULT;
@@ -3624,6 +3725,7 @@ void find_rs_device(void)
 /*
 
   0. hw problem zvlnene napeti; objednat jine kondenzatory + civku - dobry vsechno funguje, potreba lepsi design desky, kratke spoje
+     - kondenzator k ds18s20
 
   1. kalibraci tlacitek - vyreseno nastavenim pres mqtt - potreba otestovat
 
@@ -3637,9 +3739,12 @@ void find_rs_device(void)
 
   5. fix init11 mqtt connect - otestovat, nyni mqtt_init vraci stav connect a ne stav subscribe - hotovo
 
-  6. mereni loadu procesoru - hotovo- potreba otestovat
+  6. mereni loadu procesoru - vymyslet lepe
+            - pocet prijatych mqqt zprav
+            - pocet zpracovanych mqtt zprav
+            - pocet eventu od klavesnice
 
-  7. opravit uptime - otestovat - problem se zapornym intem
+  7. opravit uptime - otestovat - hotovo
 
   8. mqtt nastaveni jasu displeje - otestovat - ok
 
@@ -3684,10 +3789,12 @@ void find_rs_device(void)
       - mqtt - ok
 
   24. vyresit presnost ds18s20, prumer z nekolika hodnot
+      - pres mqtt umet nastavit periodu mereni - podpora je pripravena - potreba otestovat
+      - uplne preprogramovat mereni na hwwire, neposilat zacatek mereni na vsechny zarizeni sbernice ale adresovat primo
 
   25. vyresit mikro ventilator
 
-  26. otestovat predelane metory tds/clear, rtds/clear - hotovo
+  26. otestovat predelane metody tds/clear, rtds/clear - hotovo
 
   27. rozdil odesilani mac u rom tds - hotovo
 
@@ -3701,6 +3808,10 @@ void find_rs_device(void)
 
   32. ovladani svetel - hotovo
      - podpora pro zpetnou vazbu, napr praskla zarovka, light_state
+
+  33. ring_thermostat kdyz neni zadny aktivni vracet -1
+
+  34. nedovolit nastavit pres mqqt program, kdyz neni aktivni
 */
 
 
@@ -4187,7 +4298,6 @@ void loop()
   if ((milis - milis_10s) > 4540)
   {
     milis_10s = milis;
-    mereni_hwwire(1);
     send_mqtt_onewire();
     send_mqtt_status();
     send_mqtt_ring();
@@ -4217,7 +4327,7 @@ void loop()
     delay_show_menu++;
     milis_1s = milis;
     uptime++;
-
+    mereni_hwwire();
 
     /// pocitadlo posledni aktualizace remote tds
     for (uint8_t idx = 0; idx < MAX_RTDS; idx++)
@@ -4343,7 +4453,6 @@ ISR(TIMER2_OVF_vect)
   load2 = load_2;
   load_2 = 0;
   SREG = backup;
-
 }
 
 
