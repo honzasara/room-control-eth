@@ -23,6 +23,7 @@
 #include <saric_ds2482.h>
 #include <ow.h>
 #include <EEPROM.h>
+#include "saric_thermostat.h"
 
 #ifndef BV
 #define BV(bit) (1<<(bit))
@@ -34,11 +35,28 @@
 #define sbi(reg,bit) reg |= (BV(bit))
 #endif
 
+#define RS_MODE_SERIAL 0
+#define RS_MODE_AT 1
+#define RS_MODE_MODBUS 2
+
+#define RS_NONE 255
+#define MAX_RS_DEVICE 32
+#define RS_SEND_PAUSE 50
+
+#define WD_FREE 0
+#define WD_MQTT_LOOP 1
+#define WD_MAIN_LOOP 2
+#define WD_1SEC 3
+#define WD_05SEC 4
+#define WD_2MSEC 5
+#define WD_TIMER2 6
+#define WD_TIMER3 7
 
 #define STATUS_BIT_HEAT_OR_COOL 0
 
 #define SELFTEST_ERR_RTC 0
 #define SELFTEST_ERR_NTP 1
+#define SELFTEST_NRF_SCAN 4
 #define SELFTEST_MQTT_LINK 5
 #define SELFTEST_ETH_LINK 6
 #define SELFTEST_RESTART_NEEDED 7
@@ -52,78 +70,55 @@
 #define TYPE_DYNAMIC 2
 #define TYPE_FUNCTION_DYNAMIC 3
 
-#define HW_ONEWIRE_MAXROMS 5
-#define HW_ONEWIRE_MAXDEVICES 5
-#define MAX_THERMOSTAT 3
-#define MAX_TEMP 320
-#define MIN_TEMP 160
-#define AVAILABLE_PROGRAM 8
-#define MAX_PROGRAM_INTERVAL 11
+/*
+  #define HW_ONEWIRE_MAXROMS 6
+  #define HW_ONEWIRE_MAXDEVICES 6
+  #define MAX_THERMOSTAT 15
+  #define MAX_TEMP 320
+  #define MIN_TEMP 160
+  #define AVAILABLE_PROGRAM 8
+  #define MAX_PROGRAM_INTERVAL 11
 
-#define PROG_FREE 255
-#define PROG_NO_INTERVAL 254
-#define PROG_ACTIVE 253
+  #define PROG_FREE 255
+  #define PROG_NO_INTERVAL 254
+  #define PROG_ACTIVE 253
+  #define RING_FREE 255
+*/
 
 #define MAX_RTDS 5
 
 #define TDS_MEMORY_MAP_TDS 0
 #define TDS_MEMORY_MAP_RTDS 16
 
-#define TERM_READY 1
-#define TERM_STOP 0
-
-#define TERM_STAV_STOP 0
-#define TERM_STAV_BEZI 1
-#define TERM_OK 2
-
-
-#define TERM_MODE_OFF 0
-#define TERM_MODE_MAX 1
-#define TERM_MODE_PROG 2
-#define TERM_MODE_MAN_HEAT 3
-#define TERM_MODE_CLIMATE 4
-#define TERM_MODE_MAN_COOL 5
-#define TERM_MODE_FAN 6
-#define TERM_MODE_ERR 255
-
-#define POWER_OUTPUT_ERR 255
-#define POWER_OUTPUT_OFF 254
-
-
-#define POWER_OUTPUT_HEAT_MAX 10
-#define POWER_OUTPUT_COOL_MAX 11
-#define POWER_OUTPUT_FAN_MAX 12
-
-
-#define bootloader_tag 0
-#define time_offset 1
-#define set_default_values 90
-#define my_sense 91
-#define my_default_ring 92
-
-#define my_jas_disp 96
-#define eeprom_term_mode 97
-#define my_jas_key 98
-#define my_rs_id 99
-
-
-#define eeprom_thermostat_0 100
 /*
-   char name 0..9
-   float mezni 10..11
-   uint8_t status_bites 12
-   uint8_t program 15
-   uint8_t associate_tds 16
-   uint8_t ready 17
-   uint8_t mode 18
-   uint8_t associate_output 19
+  #define TERM_READY 1
+  #define TERM_STOP 0
+
+  #define TERM_STAV_STOP 0
+  #define TERM_STAV_BEZI 1
+  #define TERM_OK 2
+
+
+  #define TERM_MODE_OFF 0
+  #define TERM_MODE_MAX 1
+  #define TERM_MODE_PROG 2
+  #define TERM_MODE_MAN_HEAT 3
+  #define TERM_MODE_CLIMATE_MAX 4
+  #define TERM_MODE_MAN_COOL 5
+  #define TERM_MODE_FAN 6
+  #define TERM_MODE_ERR 254
+  #define TERM_MODE_FREE 255
+
+  #define POWER_OUTPUT_ERR 255
+  #define POWER_OUTPUT_OFF 254
+
+
+  #define POWER_OUTPUT_HEAT_MAX 10
+  #define POWER_OUTPUT_COOL_MAX 11
+  #define POWER_OUTPUT_FAN_MAX 12
 */
-#define eeprom_thermostat_1 120
-#define eeprom_thermostat_2 140
 
 
-#define wire_know_rom_0 160
-#define wire_know_rom_4 240
 
 
 
@@ -151,11 +146,7 @@
 
 #define LIGHT A7
 
-/*
-  #define NRF_CE 29
-  #define NRF_CS 28
-  #define NRF_IRQ 30 ///INT6
-*/
+
 
 
 #define ETH_RST 2
@@ -289,88 +280,162 @@ typedef struct struct_my_device
   uint8_t ntp_server[4];
 };
 
-#define device_nazev 260 /// 10
-#define device_mac 270  /// 6
-#define device_ip 276   /// 4
-#define device_mask 280 /// 4
-#define device_dns 284 /// 4
-#define device_gw 288 /// 4
-#define device_mqtt_server 292 /// 4
-#define device_mqtt_port 296 /// 2
-#define device_mqtt_user 298 /// 20
-#define device_mqtt_key 318 /// 20
-#define device_ntp_server 338 ///4
-#define nexxxxxt 342
+typedef struct StructRSDevice
+{
+  uint8_t last_seen;
+  uint8_t type;
+};
 
-#define pid_konst_p1 446
-#define pid_konst_i1 450
-#define pid_konst_d1 454
-#define pid_konst_p2 458
-#define pid_konst_i2 462
-#define pid_konst_d2 466
-#define pid_konst_p3 470
-#define pid_konst_i3 474
-#define pid_konst_d3 478
-#define nexxxxt 482
+#define bootloader_tag 0
+#define time_offset 1
+#define set_default_values 90
+#define my_sense 91
+#define my_default_ring 92
+
+#define my_serial_mode 94
+#define my_serial_speed 95
+#define my_jas_disp 96
+#define freex 97
+#define my_jas_key 98
+#define my_rs_id 99
 
 
-/// v promene thermostat_program_active_
-/* 0 dany program neaktivni
+#define device_nazev 100 /// 10
+#define device_mac 110  /// 6
+#define device_ip 116   /// 4
+#define device_mask 120 /// 4
+#define device_dns 124 /// 4
+#define device_gw 128 /// 4
+#define device_mqtt_server 132 /// 4
+#define device_mqtt_port 136 /// 2
+#define device_mqtt_user 138 /// 20
+#define device_mqtt_key 158 /// 20
+#define device_ntp_server 178 ///4
+#define nexxxxxt 182
+
+
+#define wire_know_rom_0 200
+#define wire_know_rom_1 220
+#define wire_know_rom_2 240
+#define wire_know_rom_3 260
+#define wire_know_rom_4 280
+#define wire_know_rom_5 280
+
+/*
+   char name 0..9
+   float mezni 10..11
+   uint8_t status_bites 12
+   uint8_t program 15
+   uint8_t associate_tds 16
+   uint8_t ready 17
+   uint8_t mode 18
+   uint8_t associate_output 19
+   float pid_p 20..23
+   float pid_i 24..27
+   float pid_d 28..31
+   uint8_t timer 32
+
+   idx * 33
+*/
+/*
+  #define eeprom_thermostat_size_bytes 33
+  #define eeprom_thermostat_name 0
+  #define eeprom_thermostat_mezni 10
+  #define eeprom_thermostat_status_bites 12
+  #define eeprom_thermostat_free_1 13
+  #define eeprom_thermostat_free_2 14
+  #define eeprom_thermostat_program 15
+  #define eeprom_thermostat_associate_tds 16
+  #define eeprom_thermostat_active 17
+  #define eeprom_thermostat_mode 18
+  #define eeprom_thermostat_associate_output 19
+  #define eeprom_thermostat_pid_p 20
+  #define eeprom_thermostat_pid_i 24
+  #define eeprom_thermostat_pid_d 28
+  #define eeprom_thermostat_pid_timer 32
+
+  #define eeprom_thermostat_0 300
+  #define eeprom_thermostat_1 333
+  #define eeprom_thermostat_2 366
+  #define eeprom_thermostat_3 399
+  #define eeprom_thermostat_4 432
+  #define eeprom_thermostat_5 465
+  #define eeprom_thermostat_6 498
+  #define eeprom_thermostat_7 531
+  #define eeprom_thermostat_8 564
+  #define eeprom_thermostat_9 597
+  #define eeprom_thermostat_10 630
+  #define eeprom_thermostat_11 663
+  #define eeprom_thermostat_12 696
+  #define eeprom_thermostat_13 729
+  #define eeprom_thermostat_14 762
+  #define nexxxxt1 795
+
+
+
+
+  /// v promene thermostat_program_active_
+  /* 0 dany program neaktivni
    1 rezim pro topeni
    2 rezim pro klimatizaci
    3 rezim pro ventilator
 */
-#define static_thermostat_program_0 500
-#define thermostat_program_0_active 500
+/*
+  #define static_thermostat_program_0 800
+  #define thermostat_program_0_active 800
 
-#define thermostat_interval_program_0_week_day 501
-#define thermostat_interval_program_0_start_1 502
-#define thermostat_interval_program_0_stop_1 503
-#define thermostat_interval_program_0_free_2 504
-#define thermostat_interval_program_0_threshold_low 505
-#define thermostat_interval_program_0_threshold_high 506
+  #define thermostat_interval_program_0_week_day 801
+  #define thermostat_interval_program_0_start_1 802
+  #define thermostat_interval_program_0_stop_1 803
+  #define thermostat_interval_program_0_free_2 804
+  #define thermostat_interval_program_0_threshold_low 805
+  #define thermostat_interval_program_0_threshold_high 806
 
-#define thermostat_interval_program_10_week_day 561
-#define thermostat_interval_program_10_start_10 562
-#define thermostat_interval_program_10_stop_10 563
-#define thermostat_interval_program_10_free_10 564
-#define thermostat_interval_program_10_threshold_low 565
-#define thermostat_interval_program_10_threshold_high 566
-#define thermostat_program_0_name 567
-
-#define static_thermostat_program_1 590
-#define static_thermostat_program_2 680
-#define static_thermostat_program_3 770
-#define static_thermostat_program_4 860
-#define static_thermostat_program_5 950
-#define static_thermostat_program_6 1040
-#define static_thermostat_program_7 1130
+  #define thermostat_interval_program_10_week_day 861
+  #define thermostat_interval_program_10_start_10 862
+  #define thermostat_interval_program_10_stop_10 863
+  #define thermostat_interval_program_10_free_10 864
+  #define thermostat_interval_program_10_threshold_low 865
+  #define thermostat_interval_program_10_threshold_high 866
+  #define thermostat_program_0_name 867
+  /*
+   spousty volneho prostoru od 877 do 889
+*/
+/*
+  #define static_thermostat_program_1 890
+  #define static_thermostat_program_2 980
+  #define static_thermostat_program_3 1070
+  #define static_thermostat_program_4 1160
+  #define static_thermostat_program_5 1250
+  #define static_thermostat_program_6 1340
+  #define static_thermostat_program_7 1430
+*/
 ///
-#define remote_tds_name0  1220
-#define remote_tds_name1  1230
-#define remote_tds_name2  1240
-#define remote_tds_name3  1250
-#define remote_tds_name4  1260
+#define remote_tds_name0  1450
+#define remote_tds_name1  1460
+#define remote_tds_name2  1470
+#define remote_tds_name3  1480
+#define remote_tds_name4  1490
 
-#define nrf_channel 1300
-#define nrf_write_name 1301
-#define nrf_read1_name 1306
-#define nrf_read2_name 1311
-#define nrf_read3_name 1312
-#define nrf_read4_name 1313
-#define nrf_read5_name 1314
-#define nrf_power 1315
+#define eeprom_nrf_channel 1500
+#define nrf_write_name 1501
+#define nrf_read1_name 1506
+#define nrf_read2_name 1511
+#define nrf_read3_name 1512
+#define nrf_read4_name 1513
+#define nrf_read5_name 1514
+#define nrf_power 1515
 
-#define light_output_0 1316
-#define light_output_7 1323
+#define light_output_0 1516
+#define light_output_7 1523
 
-#define tds_period0 1324
-#define tds_period4 1328
+#define tds_period0 1524
+#define tds_period4 1528
 
-#define tds_resolution0 1329
-#define tds_resolution4 1333
+#define tds_resolution0 1529
+#define tds_resolution4 1533
 
-///define next 1334
+///define next 1534
 
 //////////////////////////////////////////////////////////////
 RTC_DS1307 rtc;
@@ -387,8 +452,8 @@ RF24 radio(NRF_CE, NRF_CS);
 
 struct_my_device device;
 
-uint8_t therm_stav[MAX_THERMOSTAT];
-uint8_t therm_power[MAX_THERMOSTAT];
+//uint8_t therm_stav[MAX_THERMOSTAT];
+//uint8_t therm_power[MAX_THERMOSTAT];
 struct_1w_rom w_rom[HW_ONEWIRE_MAXROMS];
 struct_ds2482 ds2482_address[1];
 struct_status_DDS18s20 status_tds18s20[HW_ONEWIRE_MAXROMS];
@@ -419,6 +484,7 @@ long int milis = 0;
 long int milis_05s = 0;
 long int milis_1s = 0;
 long int milis_10s = 0;
+long int milis_1ms = 0;
 long int milis_key = 0;
 uint32_t load2 = 0;
 uint32_t load_2 = 0;
@@ -432,10 +498,18 @@ char mqtt_log[128];
 uint8_t mqtt_log_cnt = 0;
 uint8_t default_ring = 0;
 
-uint8_t rs_device[32];
+StructRSDevice rs_device[MAX_RS_DEVICE];
+uint8_t rs_find = 0;
+uint8_t rs_death_time = 0;
+uint8_t serial_mode = 0;
+uint8_t serial_max_used_tx = 0;
+uint8_t rs_start_find_device = 0;
 
 byte nrf_addresses[][6] = {"1Node", "2Node"};
-
+uint8_t scan_rf_net_enable = 0;
+uint8_t scan_rf_net_channel = 0;
+uint8_t nrf_scan_check_cnt = 0;
+uint8_t nrf_used_channels[128];
 
 uint16_t mqtt_send_message = 0;
 uint16_t mqtt_error = 0;
@@ -445,28 +519,49 @@ uint8_t keyboard_event = 0;
 
 uint8_t selftest_data = 0;
 
-double PID_Input[3];
-double PID_Output[3];
-double PID_Setpoint[3];
+/*
+  double PID_Input[MAX_THERMOSTAT];
+  double PID_Output[MAX_THERMOSTAT];
+  double PID_Setpoint[MAX_THERMOSTAT];
 
-float PID_p[3];
-float PID_i[3];
-float PID_d[3];
+  float PID_p[MAX_THERMOSTAT];
+  float PID_i[MAX_THERMOSTAT];
+  float PID_d[MAX_THERMOSTAT];
+  uint8_t PID_time[MAX_THERMOSTAT];
 
+  PID pidy[] = {
+  PID(&PID_Input[0], &PID_Output[0], &PID_Setpoint[0], 2, 5, 1, DIRECT),
+  PID(&PID_Input[1], &PID_Output[1], &PID_Setpoint[1], 2, 5, 1, DIRECT),
+  PID(&PID_Input[2], &PID_Output[2], &PID_Setpoint[2], 2, 5, 1, DIRECT),
+  PID(&PID_Input[3], &PID_Output[3], &PID_Setpoint[3], 2, 5, 1, DIRECT),
+  PID(&PID_Input[4], &PID_Output[4], &PID_Setpoint[4], 2, 5, 1, DIRECT),
+  PID(&PID_Input[5], &PID_Output[5], &PID_Setpoint[5], 2, 5, 1, DIRECT),
+  PID(&PID_Input[6], &PID_Output[6], &PID_Setpoint[6], 2, 5, 1, DIRECT),
+  PID(&PID_Input[7], &PID_Output[7], &PID_Setpoint[7], 2, 5, 1, DIRECT),
+  PID(&PID_Input[8], &PID_Output[8], &PID_Setpoint[8], 2, 5, 1, DIRECT),
+  PID(&PID_Input[9], &PID_Output[9], &PID_Setpoint[9], 2, 5, 1, DIRECT),
+  PID(&PID_Input[10], &PID_Output[10], &PID_Setpoint[10], 2, 5, 1, DIRECT),
+  PID(&PID_Input[11], &PID_Output[11], &PID_Setpoint[11], 2, 5, 1, DIRECT),
+  PID(&PID_Input[12], &PID_Output[12], &PID_Setpoint[12], 2, 5, 1, DIRECT),
+  PID(&PID_Input[13], &PID_Output[13], &PID_Setpoint[13], 2, 5, 1, DIRECT),
+  PID(&PID_Input[14], &PID_Output[14], &PID_Setpoint[14], 2, 5, 1, DIRECT),
+  };
+*/
 
-PID pid0(&PID_Input[0], &PID_Output[0], &PID_Setpoint[0], 2, 5, 1, DIRECT);
-PID pid1(&PID_Input[1], &PID_Output[1], &PID_Setpoint[1], 2, 5, 1, DIRECT);
-PID pid2(&PID_Input[2], &PID_Output[2], &PID_Setpoint[2], 2, 5, 1, DIRECT);
-
-
+uint8_t watchdog_state = 0;
 
 uint8_t use_tds = 0;
 uint8_t use_prog = 0;
 uint8_t use_light = 0;
+uint8_t use_ring = 0;
 int remote_tds[5];
 int remote_tds_last_update[5];
 uint8_t light_value[MAX_SVETEL];
 uint8_t light_state[MAX_SVETEL];
+
+
+
+
 
 /*
   const char at_term_light[] PROGMEM =  "term/light";
@@ -528,6 +623,9 @@ const char title_item_set_manual_mode_cool[] PROGMEM = "r CHL ";
 const char title_item_selftest[] PROGMEM = "-STAV-";
 const char title_item_selftest_text[] PROGMEM = "SF-$$$";
 
+const char title_item_pwm_power[] PROGMEM = "VYKON-";
+const char title_item_pwm_power_text[] PROGMEM = "V--$$$";
+
 char led_display_text[8];
 
 
@@ -547,8 +645,9 @@ RootMenu setup_select_ring;
 RootMenu setup_select_osvetleni;
 RootMenu setup_select_mode;
 RootMenu menu_show_stav;
+RootMenu menu_pwm_power_show;
 
-ItemMenu item_set_jas,  item_select_prog, item_select_ring, item_select_mode, item_select_reset, item_select_osvetleni, item_stav, item_zpet;
+ItemMenu item_set_jas,  item_select_prog, item_select_ring, item_select_mode, item_select_reset, item_select_osvetleni, item_stav, item_pwm_power, item_zpet;
 ItemMenu item_set_jas_dyn, item_set_jas_auto;
 ItemMenu item_set_man_temp;
 ItemMenu item_set_select_prog;
@@ -556,6 +655,7 @@ ItemMenu item_set_select_ring;
 ItemMenu item_set_select_osvetleni;
 ItemMenu item_set_select_mode;
 ItemMenu item_stav_show;
+ItemMenu item_pwm_power_show;
 
 ItemMenu item_set_select_mode_heat, item_set_select_mode_cool;
 
@@ -623,6 +723,7 @@ void menu_set_root_menu(RootMenu *rm)
 void menu_back_root_menu(void)
 {
   if (RootHistory.menu_max > 0 ) RootHistory.menu_max--;
+  delay_show_menu = 0;
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void menu_root_setname(RootMenu *rm, char *name)
@@ -859,15 +960,50 @@ void set_man_term_temp(uint8_t cnt, uint8_t *ret_data, char *text)
   tepl = 160 + (cnt * 5);
   itoa(tepl, text, 10);
 }
-
+/////////////////////////////////////
 void set_select_ring(uint8_t cnt, uint8_t *ret_data, char *text)
 {
-  itoa(cnt, text, 10);
+  uint8_t fix = 0;
+  char tmp1[8];
+  char c[4];
+  uint8_t findit = 0;
+  uint8_t ring = 0;
+  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+    if (thermostat_ring_get_active(idx) != RING_FREE)
+    {
+      if (fix == cnt)
+      {
+        findit = 1;
+        ring = idx;
+        break;
+      }
+      fix++;
+    }
+  if (findit == 1)
+  {
+    *ret_data = ring;
+    strcpy(tmp1, "RING");
+    if (ring < 10) strcat(tmp1, "-");
+    itoa(ring, c, 10);
+    strcat(tmp1, c);
+  }
+  if (findit != 1)
+  {
+    *ret_data = RING_FREE;
+    strcpy(tmp1, "RING-E");
+  }
+  show_direct(tmp1);
 }
-
+///////////////////////////////////////
+//////////////////////////////////////
 void selftest_show(uint8_t cnt, uint8_t *ret_data, char *text)
 {
   itoa(selftest_data, text, 10);
+}
+
+void termostat_pwm_power_show(uint8_t cnt, uint8_t *ret_data, char *text)
+{
+  itoa( thermostat_ring_get_power(default_ring), text, 10);
 }
 /////////////////////////////////////////////////////////////////////
 /// vraci list svetelnych kontroleru ///
@@ -970,7 +1106,34 @@ uint8_t rev_get_show_light(uint8_t cnt)
     }
   return index;
 }
+/////////////////////////////
+/// reverzni funkce, index menu ring vraci na skutecny index ringu
+uint8_t rev_get_show_ring(uint8_t cnt)
+{
+  uint8_t index = 0;
+  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+    if (thermostat_ring_get_active(idx) != RING_FREE)
+    {
+      if (idx == cnt)
+      {
+        break;
+      }
+      index++;
+    }
+  return index;
+}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////
+//// vraci pocet pouzitych programu
+uint8_t count_use_active_rings(void)
+{
+  uint8_t cnt = 0;
+  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+  {
+    if (thermostat_ring_get_active(idx) != RING_FREE) cnt++;
+  }
+  return cnt;
+}
+////
 //// vraci pocet pouzitych programu
 uint8_t count_use_prog(void)
 {
@@ -1172,27 +1335,33 @@ void new_parse_at(char *input, char *out1, char *out2)
   }
 }
 //////////////////////////////////////////////////////////////////////////
-void send_at(uint8_t id, char *cmd, char *args)
+uint8_t send_at(uint8_t id, char *cmd, char *args)
 {
+  uint8_t ret = 0;
   char tmp1[MAX_TEMP_BUFFER];
   char tmp2[8];
-  tmp1[0] = 0;
-  tmp2[0] = 0;
-  //digitalWrite(rs485, HIGH);
-  strcpy(tmp1, "at+");
-  itoa(id, tmp2, 10);
-  strcat(tmp1, tmp2);
-  strcat(tmp1, ",");
-  strcat(tmp1, cmd);
-  if (strlen(args) > 0)
+  if (rs_death_time == 0)
   {
+    tmp1[0] = 0;
+    tmp2[0] = 0;
+    digitalWrite(rs485, HIGH);
+    strcpy(tmp1, "at+");
+    itoa(id, tmp2, 10);
+    strcat(tmp1, tmp2);
     strcat(tmp1, ",");
-    strcat(tmp1, args);
+    strcat(tmp1, cmd);
+    if (strlen(args) > 0)
+    {
+      strcat(tmp1, ",");
+      strcat(tmp1, args);
+    }
+    strcat(tmp1, ";");
+    Serial.println(tmp1);
+    ret = 1;
   }
-  strcat(tmp1, ";");
-  Serial.println(tmp1);
-  Serial.flush();
-  //digitalWrite(rs485, LOW);
+  else
+    ret = 0;
+  return ret;
 }
 /////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -1306,12 +1475,12 @@ void time_set_offset(uint8_t offset)
 /// ulozi cislo kanalu do eeprom
 void nrf_save_channel(uint8_t channel)
 {
-  EEPROM.write(nrf_channel, channel);
+  EEPROM.write(eeprom_nrf_channel, channel);
 }
 
 uint8_t nrf_load_channel(void)
 {
-  return EEPROM.read(nrf_channel);
+  return EEPROM.read(eeprom_nrf_channel);
 }
 
 void nrf_save_power(rf24_pa_dbm_e power)
@@ -1583,129 +1752,193 @@ void save_setup_network(void)
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// ziska/nastavi nazev termostatu
-void thermostat_ring_get_name(uint8_t idx, char *name)
-{
+/*
+  /// ziska/nastavi nazev termostatu
+  void thermostat_ring_get_name(uint8_t idx, char *name)
+  {
   char t;
   for (uint8_t i = 0; i < 9; i++)
   {
-    t = EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + i);
+    t = EEPROM.read(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_name + i);
     name[i] = t;
     if (t == 0) break;
   }
-}
-void thermostat_ring_set_name(uint8_t idx, char *name)
-{
+  }
+  void thermostat_ring_set_name(uint8_t idx, char *name)
+  {
   char t;
   for (uint8_t i = 0; i < 9; i++)
   {
     t = name[i];
-    EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + i, t);
+    EEPROM.write(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_name + i, t);
     if (t == 0) break;
   }
-}
+  }
+*/
+/////////////////////////////////////////////////////////////////////////////////////////////////////////
+/*
+  /// funkce ktera nastavuje/zjistuje jestli dany operacni termostat je pripraven
+  uint8_t thermostat_ring_get_output(uint8_t idx)
+  {
+  return EEPROM.read((eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx)) + 19);
+  }
+  void thermostat_ring_set_output(uint8_t idx, uint8_t output)
+  {
+  EEPROM.write((eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx)) + 19, output);
+  }
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /// funkce ktera nastavuje/zjistuje jestli dany operacni termostat je pripraven
+  uint8_t thermostat_ring_get_active(uint8_t idx)
+  {
+  return EEPROM.read(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_active);
+  }
+  void thermostat_ring_set_active(uint8_t idx, uint8_t ready)
+  {
+  EEPROM.write(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_active, ready);
+  }
+*/
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// funkce ktera nastavuje/zjistuje jestli dany operacni termostat je pripraven
-uint8_t thermostat_ring_get_output(uint8_t idx)
-{
-  return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 19);
-}
-void thermostat_ring_set_output(uint8_t idx, uint8_t output)
-{
-  EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 19, output);
-}
-////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// funkce ktera nastavuje/zjistuje jestli dany operacni termostat je pripraven
-uint8_t thermostat_ring_get_active(uint8_t idx)
-{
-  return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 17);
-}
-void thermostat_ring_set_active(uint8_t idx, uint8_t ready)
-{
-  EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 17, ready);
-}
-/////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// funkce ktera nastavuje/zjistuje jestli dany operacni termostat je pripraven
-uint8_t thermostat_ring_get_state(uint8_t idx)
-{
+/*
+  uint8_t thermostat_ring_get_state(uint8_t idx)
+  {
   return therm_stav[idx];
-}
-void thermostat_ring_set_state(uint8_t idx, uint8_t stav)
-{
+  }
+  void thermostat_ring_set_state(uint8_t idx, uint8_t stav)
+  {
   therm_stav[idx] = stav;
-}
-////////
-/// funkce ktera nastavuje/zjistuje kolik vykonu posilam na ridici prvek
-uint8_t thermostat_ring_get_power(uint8_t idx)
-{
-  return therm_power[idx];
-}
-void thermostat_ring_set_power(uint8_t idx, uint8_t stav)
-{
+  }
+*/
+/*
+  ////////
+  /// funkce ktera nastavuje/zjistuje kolik vykonu posilam na ridici prvek
+  uint8_t thermostat_ring_get_power(uint8_t idx)
+  {
+  return pidy[idx];
+  }
+  void thermostat_ring_set_power(uint8_t idx, uint8_t stav)
+  {
   therm_power[idx] = stav;
-}
+  }
+*/
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
-//// nastaveni programu k ringu termostatu
-uint8_t thermostat_ring_get_program_id(uint8_t idx)
-{
-  return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 15);
-}
-void thermostat_ring_set_program_id(uint8_t idx, uint8_t id)
-{
-  return EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 15, id);
-}
-///////////////////////////////////////////////////////////////////////////////////////////////////////
-///mezni rozhodovaci teplota
-int thermostat_ring_get_mezni(uint8_t idx)
-{
-  return (EEPROM.read(eeprom_thermostat_0 + (20 * idx) + 10) << 8) + EEPROM.read(eeprom_thermostat_0 + (20 * idx) + 11);
-}
-void thermostat_ring_set_mezni(uint8_t idx, int temp)
-{
-  EEPROM.write(eeprom_thermostat_0 + (20 * idx) + 10, temp >> 8);
-  EEPROM.write(eeprom_thermostat_0 + (20 * idx) + 11, temp & 0xff);
-}
+/*
+  //// nastaveni programu k ringu termostatu
+  uint8_t thermostat_ring_get_program_id(uint8_t idx)
+  {
+  return EEPROM.read((eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx)) + 15);
+  }
+  void thermostat_ring_set_program_id(uint8_t idx, uint8_t id)
+  {
+  return EEPROM.write((eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx)) + 15, id);
+  }
+  ///////////////////////////////////////////////////////////////////////////////////////////////////////
+  ///mezni rozhodovaci teplota
+  int thermostat_ring_get_mezni(uint8_t idx)
+  {
+  return (EEPROM.read(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_mezni) << 8) + EEPROM.read(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_mezni + 1);
+  }
+  void thermostat_ring_set_mezni(uint8_t idx, int temp)
+  {
+  EEPROM.write(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_mezni, temp >> 8);
+  EEPROM.write(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_mezni + 1, temp & 0xff);
+  }
+*/
 //////////////////////////////////////////////////////////////////////////////////////////////////////
-/// ziska/nastavi cislo tds k ringu termostatu
-uint8_t thermostat_ring_get_asociate_tds(uint8_t idx)
-{
-  return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 16);
-}
-void thermostat_ring_set_asociate_tds(uint8_t idx, uint8_t id)
-{
-  EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 16, id);
-}
-//////////////////////////////////////////////////////////////////////////////////////////////////////
-//// nastaveni/ziska modu k ringu termostatu
-uint8_t thermostat_ring_get_mode(uint8_t idx)
-{
-  return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 18);
-}
-void thermostat_ring_set_mode(uint8_t idx, uint8_t id)
-{
-  EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 18, id);
-}
+/*
+  /// ziska/nastavi cislo tds k ringu termostatu
+  uint8_t thermostat_ring_get_asociate_tds(uint8_t idx)
+  {
+  return EEPROM.read(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_associate_tds);
+  }
+  void thermostat_ring_set_asociate_tds(uint8_t idx, uint8_t id)
+  {
+  EEPROM.write(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_associate_tds, id);
+  }
+  //////////////////////////////////////////////////////////////////////////////////////////////////////
+  //// nastaveni/ziska modu k ringu termostatu
+  uint8_t thermostat_ring_get_mode(uint8_t idx)
+  {
+  return EEPROM.read((eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx)) + eeprom_thermostat_mode);
+  }
+  void thermostat_ring_set_mode(uint8_t idx, uint8_t id)
+  {
+  EEPROM.write(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_mode, id);
+  }
+*/
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
-//// nastaveni/ziska modu k ringu termostatu
-uint8_t thermostat_ring_get_status_data(uint8_t idx)
-{
-  return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 12);
-}
-uint8_t thermostat_ring_get_status_bites(uint8_t idx, uint8_t bits)
-{
-  return EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 12) & (1 << bits);
-}
-void thermostat_ring_set_status_bites(uint8_t idx, uint8_t bytes)
-{
-  EEPROM.write((eeprom_thermostat_0 + (20 * idx)) + 12, bytes);
-}
-void thermostat_ring_update_bites(uint8_t idx, uint8_t bits, uint8_t sets)
-{
-  uint8_t b = EEPROM.read((eeprom_thermostat_0 + (20 * idx)) + 12);
+/*
+  //// nastaveni/ziska modu k ringu termostatu
+  uint8_t thermostat_ring_get_status_data(uint8_t idx)
+  {
+  return EEPROM.read(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_status_bites);
+
+  }
+  uint8_t thermostat_ring_get_status_bites(uint8_t idx, uint8_t bits)
+  {
+  return EEPROM.read(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_status_bites) & (1 << bits);
+  }
+  void thermostat_ring_set_status_bites(uint8_t idx, uint8_t bytes)
+  {
+  EEPROM.write(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_status_bites, bytes);
+  }
+  void thermostat_ring_update_bites(uint8_t idx, uint8_t bits, uint8_t sets)
+  {
+  uint8_t b = thermostat_ring_get_status_data(idx);
   if (sets == 0) cbi(b, bits);
   else sbi(b, bits);
   thermostat_ring_set_status_bites(idx, b);
-}
+  }
+*/
+/* saric_pid
+  void thermostat_ring_update_pid_parameters(uint8_t idx)
+  {
+  pidy[idx].SetTunings(PID_p[idx], PID_i[idx], PID_d[idx]);
+  pidy[idx].SetSampleTime(PID_time[idx]);
+  }
+
+  void thermostat_ring_get_pid(uint8_t idx)
+  {
+  PID_p[idx] = EEPROMreadFloat(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_pid_p);
+  PID_i[idx] = EEPROMreadFloat(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_pid_i);
+  PID_d[idx] = EEPROMreadFloat(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_pid_d);
+  PID_time[idx] = EEPROM.read(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_pid_timer);
+  }
+
+  void thermostat_ring_set_pid(uint8_t idx)
+  {
+  EEPROMwriteFloat(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_pid_p, PID_p[idx]);
+  EEPROMwriteFloat(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_pid_i, PID_i[idx]);
+  EEPROMwriteFloat(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_pid_d, PID_d[idx]);
+  EEPROM.write(eeprom_thermostat_0 + (eeprom_thermostat_size_bytes * idx) + eeprom_thermostat_pid_timer, PID_time[idx]);
+  }
+
+  void thermostat_ring_pid_set_kp(uint8_t id, float x)
+  {
+  PID_p[id] = x;
+  thermostat_ring_update_pid_parameters(id);
+  thermostat_ring_set_pid(id);
+  }
+  void thermostat_ring_pid_set_ki(uint8_t id, float x)
+  {
+  PID_i[id] = x;
+  thermostat_ring_update_pid_parameters(id);
+  thermostat_ring_set_pid(id);
+  }
+  void thermostat_ring_pid_set_kd(uint8_t id, float x)
+  {
+  PID_d[id] = x;
+  thermostat_ring_update_pid_parameters(id);
+  thermostat_ring_set_pid(id);
+  }
+
+  void thermostat_ring_pid_set_time(uint8_t id, uint8_t timer)
+  {
+  PID_time[id] = timer;
+  thermostat_ring_update_pid_parameters(id);
+  thermostat_ring_set_pid(id);
+  }
+*/
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 //****************************************************************************************************//
 void send_mqtt_message_prefix_id_topic_payload(char *prefix, uint8_t id, char *topic, char *payload)
@@ -1771,7 +2004,7 @@ void send_mqtt_general_payload(char *topic, const char *payload)
     strcat(str_topic, hostname);
     strcat(str_topic, "/");
     strcat(str_topic, topic);
-    if (mqtt_client.publish(str_topic, payload) == false)mqtt_error++;
+    if (mqtt_client.publish(str_topic, payload) == false) mqtt_error++;
   }
   else
     mqtt_error++;
@@ -1785,7 +2018,7 @@ void send_mqtt_payload(const char *topic, const char *payload)
   if (mqtt_client.connected())
   {
     mqtt_send_message++;
-    if (mqtt_client.publish(topic, payload) == false)mqtt_error++;
+    if (mqtt_client.publish(topic, payload) == false) mqtt_error++;
   }
   else
     mqtt_error++;
@@ -1826,7 +2059,6 @@ void send_mqtt_status(void)
     ///
     strcpy(str_topic, "status/mqtt/error");
     itoa(mqtt_error, payload, 10);
-    mqtt_error = 0;
     send_mqtt_general_payload(str_topic, payload);
     ///
     strcpy(str_topic, "status/mqtt/receive");
@@ -1851,7 +2083,21 @@ void send_mqtt_status(void)
     payload[0] = 0;
     createString(payload, '.', device.myIP, 4, 10);
     send_mqtt_general_payload("network/ip", payload);
+
+    strcpy(str_topic, "rs485/mode");
+    itoa(serial_mode, payload, 10);
+    send_mqtt_general_payload(str_topic, payload);
+
+    strcpy(str_topic, "rs485/speed");
+    itoa(serial_get_speed(), payload, 10);
+    send_mqtt_general_payload(str_topic, payload);
+
+    strcpy(str_topic, "rs485/queue/tx");
+    itoa(serial_max_used_tx, payload, 10);
+    send_mqtt_general_payload(str_topic, payload);
+
   }
+  mqtt_error = 0;
 }
 ///
 //// /thermctl_out/XXXXX/1wire/count
@@ -1945,7 +2191,7 @@ void send_mqtt_ring(void)
   //device_get_name(hostname);
   for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
     //// odeslu pouze pokud je ring pripraveny
-    if (thermostat_ring_get_active(idx) != 0)
+    if (thermostat_ring_get_active(idx) != RING_FREE)
     {
       thermostat_ring_get_name(idx, payload);
       send_mqtt_message_prefix_id_topic_payload("ring", idx, "name", payload);
@@ -2039,18 +2285,18 @@ void send_mqtt_program(void)
 //// thermctl-out/XXXXX/pid/IDX/kp
 //// thermctl-out/XXXXX/pid/IDX/ki
 //// thermctl-out/XXXXX/pid/IDX/kd
-void mqtt_send_pid_variable(void)
+void mqtt_send_pid_variable(uint8_t idx)
 {
   char payload[32];
-  for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
-  {
-    dtostrf(PID_p[idx], 7, 2, payload);
-    send_mqtt_message_prefix_id_topic_payload("pid", idx, "kp", payload);
-    dtostrf(PID_i[idx], 7, 2, payload);
-    send_mqtt_message_prefix_id_topic_payload("pid", idx, "ki", payload);
-    dtostrf(PID_d[idx], 7, 2, payload);
-    send_mqtt_message_prefix_id_topic_payload("pid", idx, "kd", payload);
-  }
+  dtostrf(thermostat_get_pid_p(idx), 7, 2, payload);
+  send_mqtt_message_prefix_id_topic_payload("pid", idx, "kp", payload);
+  dtostrf(thermostat_get_pid_i(idx), 7, 2, payload);
+  send_mqtt_message_prefix_id_topic_payload("pid", idx, "ki", payload);
+  dtostrf(thermostat_get_pid_d(idx), 7, 2, payload);
+  send_mqtt_message_prefix_id_topic_payload("pid", idx, "kd", payload);
+  itoa(thermostat_get_pid_time(idx), payload, 10);
+  send_mqtt_message_prefix_id_topic_payload("pid", idx, "time", payload);
+
 }
 ///
 ///
@@ -2219,7 +2465,7 @@ uint8_t convert_text_mode(char *str2)
   if (strcmp(str2, "heat") == 0) mode = TERM_MODE_MAX;
   if (strcmp(str2, "manual") == 0) mode = TERM_MODE_MAN_HEAT;
   if (strcmp(str2, "auto") == 0) mode = TERM_MODE_PROG;
-  if (strcmp(str2, "cool") == 0) mode = TERM_MODE_CLIMATE;
+  if (strcmp(str2, "cool") == 0) mode = TERM_MODE_CLIMATE_MAX;
   if (strcmp(str2, "fan_only") == 0) mode = TERM_MODE_FAN;
   return mode;
 }
@@ -2230,7 +2476,7 @@ void convert_mode_text(uint8_t mode, char *str)
   if (mode == TERM_MODE_MAX)   strcpy(str, "heat");
   if (mode == TERM_MODE_MAN_HEAT)   strcpy(str, "manual");
   if (mode == TERM_MODE_PROG)   strcpy(str, "auto");
-  if (mode == TERM_MODE_CLIMATE)   strcpy(str, "cool");
+  if (mode == TERM_MODE_CLIMATE_MAX)   strcpy(str, "cool");
   if (mode == TERM_MODE_FAN)   strcpy(str, "fan_only");
 }
 ///
@@ -2355,6 +2601,32 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
     keyboard_apply_sense();
   }
   ///
+  //// /thermctl-in/XXXX/rf/scan - 0|1 zapnuti/vypnuti scanovani rf site
+  strcpy_P(str1, thermctl_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/rf/scan");
+  if (strcmp(str1, topic) == 0)
+  {
+    if (atoi(payload) == 1)
+    {
+      start_scan_rf_network();
+      selftest_set_0(SELFTEST_NRF_SCAN);
+    }
+    else
+    {
+      stop_scan_rf_network();
+      scan_rf_network_public();
+      selftest_clear_0(SELFTEST_NRF_SCAN);
+    }
+  }
+  ///// //thermctl-in/XXXX/rf/stat - statisticke informace
+  strcpy_P(str1, thermctl_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/rf/stat");
+  {
+
+  }
+
   //// /thermctl-in/XXXX/tds/associate - asociace do tds si pridam mac 1wire - odpoved je pod jakem ID to mam ulozeno
   strcpy_P(str1, thermctl_header_in);
   strcat(str1, device.nazev);
@@ -2502,6 +2774,14 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       log_error("rtds/clear bad id");
     }
   }
+  //// ziska nastaveni remote_tds
+  strcpy_P(str1, thermctl_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/rtds/get");
+  if (strncmp(str1, topic, strlen(str1)) == 0)
+  {
+    send_mqtt_remote_tds_status();
+  }
   ////
   //// rtds/NAME - hodnota, kde NAME je nazev cidla
   strcpy(str1, "/rtds/");
@@ -2648,6 +2928,39 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
     set_default_ring(default_ring);
   }
   ///
+  //// thermctl-in/XXXXX/ring/get/IDcko/pid
+  strcpy_P(str1, thermctl_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/ring/get/");
+  if (strncmp(str1, topic, strlen(str1)) == 0)
+  {
+    strncpy(str2, payload, length);
+    cnt = 0;
+    for (uint8_t f = strlen(str1); f < strlen(topic); f++)
+    {
+      str1[cnt] = topic[f];
+      str1[cnt + 1] = 0;
+      cnt++;
+    }
+    cnt = 0;
+    pch = strtok (str1, "/");
+    while (pch != NULL)
+    {
+      if (cnt == 0) id = atoi(pch);
+      if (id < MAX_THERMOSTAT)
+      {
+        if ((cnt == 1) && (strcmp(pch, "pid") == 0))  mqtt_send_pid_variable(id);
+      }
+      else
+      {
+        log_error("ring/set bad id");
+      }
+      pch = strtok (NULL, "/");
+      cnt++;
+    }
+  }
+  ///
+  ///
   //// thermctl-in/XXXXX/ring/set/IDcko/name
   //// thermctl-in/XXXXX/ring/set/IDcko/program
   //// thermctl-in/XXXXX/ring/set/IDcko/threshold
@@ -2660,6 +2973,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   //// thermctl-in/XXXXX/ring/set/IDcko/pid_kp
   //// thermctl-in/XXXXX/ring/set/IDcko/pid_ki
   //// thermctl-in/XXXXX/ring/set/IDcko/pid_kd
+  //// thermctl-in/XXXXX/ring/set/IDcko/pid_time
   strcpy_P(str1, thermctl_header_in);
   strcat(str1, device.nazev);
   strcat(str1, "/ring/set/");
@@ -2708,12 +3022,10 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
         if ((cnt == 1) && (strcmp(pch, "rtds") == 0)) thermostat_ring_set_asociate_tds(id, atoi(str2) + TDS_MEMORY_MAP_RTDS);
         if ((cnt == 1) && (strcmp(pch, "active") == 0)) thermostat_ring_set_active(id, atoi(str2));
         if ((cnt == 1) && (strcmp(pch, "output") == 0)) thermostat_ring_set_output(id, atoi(str2));
-        if ((cnt == 1) && (strcmp(pch, "pid_kp") == 0)) pid_set_kp(id, atof(str2));
-        if ((cnt == 1) && (strcmp(pch, "pid_ki") == 0)) pid_set_ki(id, atof(str2));
-        if ((cnt == 1) && (strcmp(pch, "pid_kd") == 0)) pid_set_kd(id, atof(str2));
-
-
-
+        if ((cnt == 1) && (strcmp(pch, "pid_kp") == 0)) thermostat_ring_pid_set_kp(id, atof(str2));
+        if ((cnt == 1) && (strcmp(pch, "pid_ki") == 0)) thermostat_ring_pid_set_ki(id, atof(str2));
+        if ((cnt == 1) && (strcmp(pch, "pid_kd") == 0)) thermostat_ring_pid_set_kd(id, atof(str2));
+        if ((cnt == 1) && (strcmp(pch, "pid_time") == 0)) thermostat_ring_pid_set_time(id, atoi(str2));
       }
       else
       {
@@ -2872,6 +3184,51 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       if ((cnt == 1) && (strcmp(pch, "value") == 0)) light_value[id] = atoi(str2);
       pch = strtok (NULL, "/");
       cnt++;
+    }
+  }
+
+
+  //// /thermctl-in/rs485/set/mode
+  /// serial-half-duplex generic
+  /// at
+  /// modbus
+  strcpy_P(str1, thermctl_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/rs485/set/mode");
+  if (strncmp(str1, topic, strlen(str1)) == 0)
+  {
+    mqtt_process_message++;
+    strncpy(str2, payload, length);
+    serial_set_mode(atoi(str2));
+  }
+  //// /thermctl-in/rs485/set/speed
+  strcpy_P(str1, thermctl_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/rs485/set/speed");
+  if (strncmp(str1, topic, strlen(str1)) == 0)
+  {
+    mqtt_process_message++;
+    strncpy(str2, payload, length);
+    serial_set_speed(atoi(str2));
+    Serial.end();
+    Serial.begin(serial_get_speed() * 9600);
+  }
+
+  //// /thermctl-in/rs485/send
+
+  //// /thermctl-in/rs485/find_at_devices
+  strcpy_P(str1, thermctl_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/rs485/find_at_devices");
+  if (strncmp(str1, topic, strlen(str1)) == 0)
+  {
+    mqtt_process_message++;
+    rs_start_find_device = 1;
+    rs_find = 0;
+    for (uint8_t idx = 0; idx < MAX_RS_DEVICE; idx++)
+    {
+      rs_device[idx].last_seen = RS_NONE;
+      rs_device[idx].type = RS_NONE;
     }
   }
 
@@ -3088,65 +3445,13 @@ void selftest(void)
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*************************************************************************************************************************************************/
-///   NASTAVENI PID REGULATORU ///
-void pid_update_variable(void)
-{
-  pid0.SetTunings(PID_p[0], PID_i[0], PID_d[0]);
-  pid1.SetTunings(PID_p[1], PID_i[1], PID_d[1]);
-  pid2.SetTunings(PID_p[2], PID_i[2], PID_d[2]);
-}
-
-void pid_save_variable(void)
-{
-  EEPROMwriteFloat(pid_konst_p1, PID_p[0]);
-  EEPROMwriteFloat(pid_konst_p2, PID_p[1]);
-  EEPROMwriteFloat(pid_konst_p3, PID_p[2]);
-  EEPROMwriteFloat(pid_konst_i1, PID_i[0]);
-  EEPROMwriteFloat(pid_konst_i2, PID_i[1]);
-  EEPROMwriteFloat(pid_konst_i3, PID_i[2]);
-  EEPROMwriteFloat(pid_konst_d1, PID_d[0]);
-  EEPROMwriteFloat(pid_konst_d2, PID_d[1]);
-  EEPROMwriteFloat(pid_konst_d3, PID_d[2]);
-}
-
-void pid_load_variable(void)
-{
-  PID_p[0] = EEPROMreadFloat(pid_konst_p1);
-  PID_p[1] = EEPROMreadFloat(pid_konst_p2);
-  PID_p[2] = EEPROMreadFloat(pid_konst_p3);
-  PID_i[0] = EEPROMreadFloat(pid_konst_i1);
-  PID_i[1] = EEPROMreadFloat(pid_konst_i2);
-  PID_i[2] = EEPROMreadFloat(pid_konst_i3);
-  PID_d[0] = EEPROMreadFloat(pid_konst_d1);
-  PID_d[1] = EEPROMreadFloat(pid_konst_d2);
-  PID_d[2] = EEPROMreadFloat(pid_konst_d3);
-}
-
-void pid_set_kp(uint8_t id, float x)
-{
-  PID_p[id] = x;
-  pid_update_variable();
-  pid_save_variable();
-}
-void pid_set_ki(uint8_t id, float x)
-{
-  PID_i[id] = x;
-  pid_update_variable();
-  pid_save_variable();
-}
-void pid_set_kd(uint8_t id, float x)
-{
-  PID_d[id] = x;
-  pid_update_variable();
-  pid_save_variable();
-}
 
 /**********************************************************************************************************************************/
-//// NASTAVENI PROGRAMU /////////////////////////////////
-//// ziska pojmenovani programu
-void thermostat_program_get_name(uint8_t ring_id, char *name)
-{
+/*
+  //// NASTAVENI PROGRAMU /////////////////////////////////
+  //// ziska pojmenovani programu
+  void thermostat_program_get_name(uint8_t ring_id, char *name)
+  {
   uint8_t t = 0;
   for (uint8_t i = 0; i < 9; i++)
   {
@@ -3154,77 +3459,85 @@ void thermostat_program_get_name(uint8_t ring_id, char *name)
     name[i] = t;
     if (t == 0) break;
   }
-}
-//// nastavi pojmenovani programu
-void thermostat_program_set_name(uint8_t ring_id, char *name)
-{
+  }
+  //// nastavi pojmenovani programu
+  void thermostat_program_set_name(uint8_t ring_id, char *name)
+  {
   for (uint8_t i = 0; i < 9; i++)
   {
     EEPROM.write(thermostat_program_0_name + (ring_id * 90) + i, name[i]);
     if (name[i] == 0) break;
   }
-}
-//// globalni povoleni programu a nastaveni rezimu
-uint8_t thermostat_program_get_active(uint8_t ring_id)
-{
+  }
+  //// globalni povoleni programu a nastaveni rezimu
+  uint8_t thermostat_program_get_active(uint8_t ring_id)
+  {
   return EEPROM.read(thermostat_program_0_active + (ring_id * 90) );
-}
-void thermostat_program_set_active(uint8_t ring_id, uint8_t active)
-{
+  }
+  void thermostat_program_set_active(uint8_t ring_id, uint8_t active)
+  {
   EEPROM.write(thermostat_program_0_active + (ring_id * 90), active);
-}
+  }
+*/
 /***************************************************************************************************************/
-//// ziska jakych dnech program plati
-uint8_t thermostat_program_get_week(uint8_t ring_id, uint8_t progid)
-{
+/*
+  //// ziska jakych dnech program plati
+  uint8_t thermostat_program_get_week(uint8_t ring_id, uint8_t progid)
+  {
   return EEPROM.read(thermostat_interval_program_0_week_day + (ring_id * 90) + (progid * 6) );
-}
-//// nastavi jaky v jakych dnech program plati
-void thermostat_program_set_week(uint8_t ring_id, uint8_t progid, uint8_t week)
-{
+  }
+  //// nastavi jaky v jakych dnech program plati
+  void thermostat_program_set_week(uint8_t ring_id, uint8_t progid, uint8_t week)
+  {
   EEPROM.write(thermostat_interval_program_0_week_day + (ring_id * 90) + (progid * 6), week);
-}
+  }
+*/
 /***************************************************************************************************************/
-//// ziska cas termostatu
-void thermostat_program_get_time(uint8_t ring_id, uint8_t progid, uint8_t *start_hour, uint8_t *start_min, uint8_t *stop_hour, uint8_t *stop_min, uint8_t *active)
-{
+/*
+  //// ziska cas termostatu
+  void thermostat_program_get_time(uint8_t ring_id, uint8_t progid, uint8_t *start_hour, uint8_t *start_min, uint8_t *stop_hour, uint8_t *stop_min, uint8_t *active)
+  {
   uint8_t start = EEPROM.read(thermostat_interval_program_0_start_1 + (ring_id * 90) + (progid * 6));
   uint8_t stop = EEPROM.read(thermostat_interval_program_0_stop_1 + (ring_id * 90)  + (progid * 6));
-  *start_hour = (start >> 3) & 0b00011111;
-  *start_min = (start >> 1 & 0b00000011) * 15;
-  *stop_hour = (stop >> 3) & 0b00011111;
-  *stop_min = (stop & 0b00000011) * 15;
-  *active = start & 0b00000001;
-}
-//// nastavi cas termostatu
-void thermostat_program_set_time(uint8_t ring_id, uint8_t progid, uint8_t start_hour, uint8_t start_min, uint8_t stop_hour, uint8_t stop_min, uint8_t active)
-{
+   start_hour = (start >> 3) & 0b00011111;
+   start_min = (start >> 1 & 0b00000011) * 15;
+   stop_hour = (stop >> 3) & 0b00011111;
+   stop_min = (stop & 0b00000011) * 15;
+   active = start & 0b00000001;
+  }
+  //// nastavi cas termostatu
+  void thermostat_program_set_time(uint8_t ring_id, uint8_t progid, uint8_t start_hour, uint8_t start_min, uint8_t stop_hour, uint8_t stop_min, uint8_t active)
+  {
   uint8_t start, stop;
   start = ((start_hour << 3) & 0b11111000) + (((start_min / 15) << 1) & 0b00000110 ) + (active & 0b00000001);
   stop = ((stop_hour << 3) & 0b11111000) + ((stop_min / 15) & 0b00000011);
   EEPROM.write(thermostat_interval_program_0_start_1 + (ring_id * 90) + (progid * 6), start);
   EEPROM.write(thermostat_interval_program_0_stop_1 + (ring_id * 90) + (progid * 6), stop);
-}
+  }
+*/
 /***************************************************************************************************************/
 
 /***************************************************************************************************************/
-//// ziska rozhodovaci uroven termostatu
-uint16_t thermostat_program_get_threshold(uint8_t program, uint8_t progid)
-{
+/*
+  //// ziska rozhodovaci uroven termostatu
+  uint16_t thermostat_program_get_threshold(uint8_t program, uint8_t progid)
+  {
   uint16_t ret = 0;
   ret = (EEPROM.read(thermostat_interval_program_0_threshold_high + (program * 90) + (progid * 6)) << 8)  + EEPROM.read(thermostat_interval_program_0_threshold_low + (program * 90) + (progid * 6));
   return ret;
-}
-//// nastavi rozhodovaci uroven termostatu
-void thermostat_program_set_threshold(uint8_t program, uint8_t progid, uint16_t threshold)
-{
+  }
+  //// nastavi rozhodovaci uroven termostatu
+  void thermostat_program_set_threshold(uint8_t program, uint8_t progid, uint16_t threshold)
+  {
   EEPROM.write(thermostat_interval_program_0_threshold_high + (program * 90) + (progid * 6), ((threshold >> 8) & 0xff));
   EEPROM.write(thermostat_interval_program_0_threshold_low + (program * 90) + (progid * 6), (threshold & 0xff));
-}
+  }
+*/
 /***************************************************************************************************************/
-//// rozparsuje casovy format start_hour,start_min,stop_hour,stop_min,active a ulozi jej
-void thermostat_program_set_parse_interval(uint8_t program, uint8_t progid,  char *str)
-{
+/*
+  //// rozparsuje casovy format start_hour,start_min,stop_hour,stop_min,active a ulozi jej
+  void thermostat_program_set_parse_interval(uint8_t program, uint8_t progid,  char *str)
+  {
   uint8_t cnt;
   uint8_t start_hour = 0, start_min = 0, stop_hour = 0, stop_min = 0, active = 0, week = 0;
   char *pch;
@@ -3247,20 +3560,24 @@ void thermostat_program_set_parse_interval(uint8_t program, uint8_t progid,  cha
     thermostat_program_set_time(program, progid, start_hour, start_min, stop_hour, stop_min, active);
     thermostat_program_set_week(program, progid, week);
   }
-}
+  }
+*/
 /***************************************************************************************************************/
-void thermostat_program_set_progid_active(uint8_t program, uint8_t progid, uint8_t set_active)
-{
+/*
+  void thermostat_program_set_progid_active(uint8_t program, uint8_t progid, uint8_t set_active)
+  {
   uint8_t start_hour, start_min, stop_hour, stop_min, active;
   thermostat_program_get_time(program, progid, &start_hour, &start_min, &stop_hour, &stop_min, &active);
   if (active != set_active)
     thermostat_program_set_time(program, progid, start_hour, start_min, stop_hour, stop_min, set_active);
-}
+  }
+*/
 /***************************************************************************************************************/
 ///// vraci 1 pokud je termostat aktivni
 /// now.dayOfTheWeek() 0..nedele; 6..sobota
-uint8_t thermostat_running(uint8_t program, int16_t *threshold)
-{
+/*
+  uint8_t thermostat_running(uint8_t program, int16_t *threshold)
+  {
   uint8_t ret = PROG_FREE;
   uint8_t start_hour, start_min, stop_hour, stop_min, active, week;
   int16_t t_start, t_stop, t_now;
@@ -3278,7 +3595,7 @@ uint8_t thermostat_running(uint8_t program, int16_t *threshold)
         t_now = now.hour() * 60 + now.minute();
         if (t_now >= t_start && t_now < t_stop && (week & (1 << now.dayOfTheWeek()) != 0))
         {
-          *threshold = thermostat_program_get_threshold(program, interval_id);
+           threshold = thermostat_program_get_threshold(program, interval_id);
           ret = PROG_ACTIVE;
           break;
         }
@@ -3287,11 +3604,12 @@ uint8_t thermostat_running(uint8_t program, int16_t *threshold)
     ret = PROG_NO_INTERVAL;
   }
   return ret;
-}
-
+  }
+*/
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 void thermostat(void)
 {
   uint8_t tdsid = 0;
@@ -3315,7 +3633,7 @@ void thermostat(void)
     if (tmode == TERM_MODE_PROG)
     {
       prg = thermostat_ring_get_program_id(tix);
-      te = thermostat_running(prg, &thresh);
+      te = thermostat_running(prg, &thresh, now.hour(), now.minute(), now.dayOfTheWeek());
       switch (te)
       {
         case PROG_FREE:
@@ -3355,16 +3673,14 @@ void thermostat(void)
 
     if (tmode == TERM_MODE_MAN_HEAT)
     {
-      if (tix == 0) pid0.SetControllerDirection(DIRECT);
-      if (tix == 1) pid1.SetControllerDirection(DIRECT);
-      if (tix == 2) pid2.SetControllerDirection(DIRECT);
+      //pidy[tix].SetControllerDirection(DIRECT);
+      thermostat_pid_setdirection_direct(tix);
     }
 
     if (tmode == TERM_MODE_MAN_COOL)
     {
-      if (tix == 0) pid0.SetControllerDirection(REVERSE);
-      if (tix == 1) pid1.SetControllerDirection(REVERSE);
-      if (tix == 3) pid2.SetControllerDirection(REVERSE);
+      //pidy[tix].SetControllerDirection(REVERSE);
+      thermostat_pid_setdirection_reverse(tix);
     }
 
     if (tdsid >= TDS_MEMORY_MAP_TDS && tdsid < TDS_MEMORY_MAP_RTDS)
@@ -3372,9 +3688,9 @@ void thermostat(void)
       if (get_tds18s20(tdsid, &tds) == 1)
         if (tds.used == 1 && status_tds18s20[tdsid].online == True)
         {
-          PID_Input[tix] = status_tds18s20[tdsid].temp / 100;
-          PID_Setpoint[tix] = thresh;
-          pwm = PID_Output[tix];
+          thermostat_pid_input(tix, status_tds18s20[tdsid].temp / 100);
+          thermostat_pid_setpoint(tix, thresh);
+          pwm = thermostat_pid_output(tix);
           thermostat_ring_set_power(tix, pwm);
         }
         else
@@ -3391,9 +3707,9 @@ void thermostat(void)
       remote_tds_get_active(act , &active);
       if (active == 1 && remote_tds_last_update[act] < 180)
       {
-        PID_Input[tix] = remote_tds[act] / 10;
-        PID_Setpoint[tix] = thresh;
-        pwm = PID_Output[tix];
+        thermostat_pid_input(tix, remote_tds[act] / 10);
+        thermostat_pid_setpoint(tix, thresh);
+        pwm = thermostat_pid_output(tix);
         thermostat_ring_set_power(tix, pwm);
       }
       else
@@ -3406,12 +3722,18 @@ void thermostat(void)
 
     if (tmode == TERM_MODE_MAN_HEAT)
     {
-
+      if (pwm < 25)
+        blink_led_set(LED_UP_I, 1);
+      else
+        blink_led_off(LED_UP_I);
     }
 
     if (tmode == TERM_MODE_MAN_COOL)
     {
-
+      if (pwm < 25)
+        blink_led_set(LED_DOWN_I, 1);
+      else
+        blink_led_off(LED_DOWN_I);
     }
 
     if (tmode == TERM_MODE_OFF)
@@ -3424,7 +3746,7 @@ void thermostat(void)
       mqtt_publis_output(tout, POWER_OUTPUT_HEAT_MAX);
       thermostat_ring_set_power(tix, 255);
     }
-    if (tmode == TERM_MODE_CLIMATE)
+    if (tmode == TERM_MODE_CLIMATE_MAX)
     {
       mqtt_publis_output(tout, POWER_OUTPUT_COOL_MAX);
       thermostat_ring_set_power(tix, 255);
@@ -3441,7 +3763,7 @@ void thermostat(void)
 /// servisni logovatko pres mqtt ///
 int printf_via_mqtt( char c, FILE * t)
 {
-  char topic[8];
+  char topic[16];
   mqtt_log[mqtt_log_cnt] = c;
   mqtt_log[mqtt_log_cnt + 1] = 0;
   mqtt_log_cnt++;
@@ -3455,10 +3777,9 @@ int printf_via_mqtt( char c, FILE * t)
 ////
 void log_error(char *log)
 {
-  char topic[32];
+  char topic[16];
   strcpy(topic, "log-app");
   send_mqtt_general_payload(topic, log);
-
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -3474,21 +3795,50 @@ uint8_t get_default_ring(void)
 
 void thermostat_ring_clear(uint8_t idx)
 {
-  PID_p[idx] = 1;
-  PID_i[idx] = 0.5;
-  PID_d[idx] = 1;
-  pid_save_variable();
+  //PID_p[idx] = 1;
+  //PID_i[idx] = 0.5;
+  //PID_d[idx] = 1;
+  //PID_time[idx] = 60;
+  thermostat_ring_pid_set_kp(idx, 1);
+  thermostat_ring_pid_set_ki(idx, 0.5);
+  thermostat_ring_pid_set_kd(idx, 1);
+  thermostat_ring_pid_set_time(idx, 60);
+
+
   thermostat_ring_set_asociate_tds(idx, 255);
   thermostat_ring_set_mezni(idx, 220);
   thermostat_ring_set_program_id(idx, PROG_FREE);
   thermostat_ring_set_state(idx, 0);
   thermostat_ring_set_power(idx, 0);
-  thermostat_ring_set_active(idx, 0);
+  thermostat_ring_set_active(idx, RING_FREE);
   thermostat_ring_set_output(idx, 255);
   thermostat_ring_set_mode(idx, 0);
   thermostat_ring_set_name(idx, "FREE");
   thermostat_ring_set_status_bites(idx, 0);
+}
+/////////////////////////////
+///#define my_serial_mode 94
+//#define my_serial_speed 95
 
+void serial_set_mode(uint8_t mode)
+{
+  EEPROM.write(my_serial_mode, mode);
+  serial_mode = mode;
+}
+
+uint8_t serial_get_mode(void)
+{
+  return EEPROM.read(my_serial_mode);
+}
+
+void serial_set_speed(uint8_t speedy)
+{
+  EEPROM.write(my_serial_speed, speedy);
+}
+
+uint8_t serial_get_speed(void)
+{
+  return EEPROM.read(my_serial_speed);
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup(void)
@@ -3506,9 +3856,6 @@ void setup(void)
   fdevopen( &printf_via_mqtt, 0);
 
   struct_DDS18s20 tds;
-  // put your setup code here, to run once:
-  // komunikace přes sériovou linku rychlostí 19200
-  //Serial.begin(38400);
 
   menu_history_init(&rm);
   menu_init(&rm);
@@ -3531,6 +3878,7 @@ void setup(void)
   menu_init(&setup_select_osvetleni);
   menu_init(&setup_select_mode);
   menu_init(&menu_show_stav);
+  menu_init(&menu_pwm_power_show);
 
   menu_root_setname(&term_man, title_term_man);
   menu_root_setname(&term_prog, title_term_prog);
@@ -3544,6 +3892,7 @@ void setup(void)
   menu_root_setname(&setup_select_osvetleni, title_item_set_select_osvetleni);
   menu_root_setname(&setup_select_mode, title_item_set_manual_mode);
   menu_root_setname(&menu_show_stav, title_item_selftest);
+  menu_root_setname(&menu_pwm_power_show, title_item_pwm_power);
 
   menu_item_set_properties(&item_zpet, title_menu_back, TYPE_STATIC, nullptr);
   menu_item_set_properties(&item_set_jas, title_item_setup_jas, TYPE_STATIC, nullptr);
@@ -3554,11 +3903,13 @@ void setup(void)
 
   menu_item_set_properties(&item_select_mode, title_item_set_manual_mode, TYPE_STATIC, nullptr, 0, 0);
   menu_item_set_properties(&item_stav, title_item_selftest, TYPE_STATIC, nullptr, 0, 0);
+  menu_item_set_properties(&item_pwm_power, title_item_pwm_power, TYPE_STATIC, nullptr, 0, 0);
 
   menu_root_additem(&setup_menu, &item_set_jas);
   menu_root_additem(&setup_menu, &item_select_prog);
   menu_root_additem(&setup_menu, &item_select_ring);
   menu_root_additem(&setup_menu, &item_select_mode);
+  menu_root_additem(&setup_menu, &item_pwm_power);
   menu_root_additem(&setup_menu, &item_select_osvetleni);
   menu_root_additem(&setup_menu, &item_select_reset);
   menu_root_additem(&setup_menu, &item_stav);
@@ -3571,7 +3922,7 @@ void setup(void)
   menu_item_set_properties(&item_set_jas_auto, title_item_setup_jas_auto, TYPE_STATIC, nullptr);
 
   menu_item_set_properties(&item_set_select_prog, title_item_set_select_prog, TYPE_FUNCTION_DYNAMIC, set_select_active_prog, 0, 0);
-  menu_item_set_properties(&item_set_select_ring, title_item_set_select_ring, TYPE_DYNAMIC, set_select_ring, 0, 2);
+  menu_item_set_properties(&item_set_select_ring, title_item_set_select_ring, TYPE_FUNCTION_DYNAMIC, set_select_ring, 0, 0);
 
   menu_root_additem(&setup_menu_jas, &item_set_jas_dyn);
   menu_root_additem(&setup_menu_jas, &item_set_jas_auto);
@@ -3594,6 +3945,8 @@ void setup(void)
   menu_item_set_properties(&item_stav_show, title_item_selftest_text, TYPE_DYNAMIC, selftest_show, 0, 0);
   menu_root_additem(&menu_show_stav, &item_stav_show);
 
+  menu_item_set_properties(&item_pwm_power_show, title_item_pwm_power_text, TYPE_DYNAMIC, termostat_pwm_power_show, 0, 0);
+  menu_root_additem(&menu_pwm_power_show, &item_pwm_power_show);
 
   pinMode(ETH_RST, OUTPUT);
   digitalWrite(ETH_RST, HIGH);
@@ -3672,8 +4025,11 @@ void setup(void)
   TIMSK3 |= (1 << TOIE3);
 
   TCCR2A = 0;
-  TCCR2B  = (1 << CS22) | (1 << CS21) | (1 << CS20); /// delicka 128
+  TCCR2B  = (1 << CS22); //delicka 64
+  timer2_counter = 5;
+  TCNT2 = timer2_counter;
   TIMSK2 |= (1 << TOIE2);
+
 
   interrupts();             // enable all interrupts
   SPI.begin();
@@ -3692,17 +4048,21 @@ void setup(void)
         strcpy(tmp1, "I0-FR-");
         show_direct(tmp1);
 
+        randomSeed(analogRead(A0));
         EEPROM.write(set_default_values, 0);
         EEPROM.write(my_jas_disp, 240);
         EEPROM.write(my_jas_key, 240);
         EEPROM.write(my_rs_id, 31);
         keyboard_set_sense(255);
-        for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++) thermostat_ring_clear(idx);
-
+        ///
+        for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+          thermostat_ring_clear(idx);
+        ///
         for (uint8_t idx = 0; idx < MAX_RTDS; idx++)
         {
           remote_tds_set_name(idx, 0 , "");
         }
+
         for (uint8_t idx = 0; idx < AVAILABLE_PROGRAM; idx++)
         {
           strcpy(str2, "PROG");
@@ -3729,7 +4089,7 @@ void setup(void)
         for (uint8_t idx = 0; idx < MAX_SVETEL; idx++) light_set_output(idx, LIGHT_FREE);
         rtc.adjust(DateTime(2020, 12, 14, 17, 14, 0));
 
-        device.mac[0] = 2; device.mac[1] = 1; device.mac[2] = 2; device.mac[3] = 3; device.mac[4] = 4; device.mac[5] = 8;
+        device.mac[0] = 2; device.mac[1] = 1; device.mac[2] = 2; device.mac[3] = random(100, 150); device.mac[4] = random(3, 200); device.mac[5] = random(13, 204);
         device.myIP[0] = 192; device.myIP[1] = 168; device.myIP[2] = 2; device.myIP[3] = 112;
         device.myMASK[0] = 255; device.myMASK[1] = 255; device.myMASK[2] = 255; device.myMASK[3] = 0;
 
@@ -3747,6 +4107,10 @@ void setup(void)
         nrf_save_channel(76);
         set_default_ring(0);
         time_set_offset(1);
+
+        serial_set_mode(RS_MODE_SERIAL);
+        /// speed je nasobek 9600
+        serial_set_speed(1);
         delay(1000);
       }
     }
@@ -3767,7 +4131,9 @@ void setup(void)
       rsid = EEPROM.read(my_rs_id);
       analogWrite(PWM_DISP, jas_disp);
       analogWrite(PWM_KEY, jas_key);
-      pid_load_variable();
+
+
+
       default_ring = get_default_ring();
       for (uint8_t idx = 0; idx < MAX_SVETEL; idx++)
       {
@@ -3779,12 +4145,7 @@ void setup(void)
         for (uint8_t cnt = 0; cnt < MAX_AVG_TEMP; cnt++)
           status_tds18s20[idx].average_temp[cnt] = 20000;
 
-      /// po startu vychozi hodnoty, vsechno vypnuto
-      for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
-      {
-        thermostat_ring_set_state(idx, 0);
-        thermostat_ring_set_power(idx, 0);
-      }
+
     }
     ////
     if (inic == 3)
@@ -3849,25 +4210,17 @@ void setup(void)
     ////
     if (inic == 7)
     {
-      strcpy(tmp1, "I7-PID");
+      strcpy(tmp1, "I7TERM");
       show_direct(tmp1);
+      thermostat_init_pid();
       /// nastaveni vychozich hodnot pro regulator
-      for (uint8_t idx = 0; idx < 3; idx++)
+      for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
       {
-        PID_Input[idx] = 225;
-        PID_Output[idx] = 0;
-        PID_Setpoint[idx] = 225;
+        thermostat_ring_set_state(idx, 0);
+        thermostat_ring_set_power(idx, 0);
+        thermostat_ring_get_pid_eeprom(idx);
+        thermostat_ring_update_pid_parameters(idx);
       }
-      pid0.SetMode(AUTOMATIC);
-      pid1.SetMode(AUTOMATIC);
-      pid2.SetMode(AUTOMATIC);
-      pid0.SetOutputLimits(0, 255);
-      pid1.SetOutputLimits(0, 255);
-      pid2.SetOutputLimits(0, 255);
-      pid0.SetSampleTime(30000);
-      pid1.SetSampleTime(30000);
-      pid2.SetSampleTime(30000);
-      pid_update_variable();
     }
     ////
     if (inic == 8)
@@ -3946,8 +4299,17 @@ void setup(void)
     ////
     if (inic == 13)
     {
-      strcpy(tmp1, "I-RTDS");
+      strcpy(tmp1, "RS 485");
       show_direct(tmp1);
+      serial_mode = serial_get_mode();
+      Serial.begin(serial_get_speed() * 9600);
+      rs_start_find_device = 0;
+      rs_find = 0;
+      for (uint8_t idx = 0; idx < MAX_RS_DEVICE; idx++)
+      {
+        rs_device[idx].last_seen = RS_NONE;
+        rs_device[idx].type = RS_NONE;
+      }
     }
     ////
     if (inic == 14)
@@ -4027,7 +4389,20 @@ void write_to_mcp(uint8_t data)
 ////////////////////////////////////////////////////////////////////////////////////////////////
 void find_rs_device(void)
 {
-
+  char str1[32];
+  if (rs_find < 32)
+  {
+    if (send_at(rs_find, "device/ident", "") == 1)
+    {
+      rs_device[rs_find].last_seen = 0;
+      rs_find++;
+    }
+  }
+  else
+  {
+    rs_find = 0;
+    rs_start_find_device = 0;
+  }
 
 }
 
@@ -4059,25 +4434,29 @@ uint8_t blink_led_get_freq(uint8_t led_index)
   out = out >> (led_index * 2);
   return out;
 }
+
+
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///potreba udelat
 /*
+  -1.
+
   0. hw problem zvlnene napeti; objednat jine kondenzatory + civku - dobry vsechno funguje, potreba lepsi design desky, kratke spoje
      - kondenzator k ds18s20
 
   1. klavesnice
      - kalibraci tlacitek - vyreseno nastavenim pres mqtt - potreba otestovat
      - podsviceni tlacitek - vyreseni nastavenim preq mqtt - potreba otestovat
-     - nocni rezim led podsvetleni tlacitek - na soucasne revizi nejde, mozne reseni je vyuzit svetlo vodivy plat
+     - nocni rezim led podsvetleni tlacitek - na soucasne revizi nejde, mozne reseni je vyuzit svetlo vodivy plast
 
 
   2. display
      - mqtt nastaveni jasu displeje - otestovat - ok
      - tecku displayje - hotovo
-     - menu zjistit pwm vykon
+     - menu zjistit pwm vykon, udelat nove menu - hotovo
      - umet blikat s kazdou ledkou jinak rychle 4 rychlosti 0,1,2,5hz - hotovo
         - registr led_blink, rozdelim na 4 useky, budu potrebovat 2 byty
-     - blikat pri rucne nastavene teplote
+     - blikat pri rucne nastavene teplote - otestovat v realu
         - UP ledka pri rezimu pro topeni
         - DOWN ledka pro rezimu pro chlazeni
      - blikat ledka progam
@@ -4100,7 +4479,7 @@ uint8_t blink_led_get_freq(uint8_t led_index)
      - kompletne predelano funkce vraci stav mqtt clienta
 
   6. metriky zarizeni
-     - mereni loadu procesoru - vymyslet lepe
+     - mereni loadu procesoru - vymyslet lepe, stale nedoreseno
      - pocet odeslanych mqqt zprav - potreba otestovat - hotovo
      - pocet prijatych mqqt zprav - potreba otestovat - hotovo
      - pocet zpracovanych mqtt zprav - potreba otestovat - hotovo
@@ -4118,7 +4497,10 @@ uint8_t blink_led_get_freq(uint8_t led_index)
 
   9. napojeni rs485 zarizeni
      - pres mqtt typ linky, modbus, obecny rs485
+        - rychlost cislo * 9600
+        - mode
      - umet resit sinclair
+     - umet odeslat zpravu
 
   10. preposilat nrf zpravy
 
@@ -4133,6 +4515,7 @@ uint8_t blink_led_get_freq(uint8_t led_index)
       - nastavit nazev write kanalu
       - nastavit nazev read kanalu 1..5
       - vysilaci vykon
+      - scan site - hotovo
     - zatim jen pripraveno
 
   14. bootloader po ethernetu
@@ -4158,7 +4541,6 @@ uint8_t blink_led_get_freq(uint8_t led_index)
 
   21. ring main. tj, ktery ring nastavuji pres display - hotovo
       - mqtt - ok
-      - zmenit misto pro notifikacni zpravu mqtt, ted je to ve status, hodit to do ring
 
   22. vyresit presnost ds18s20, prumer z nekolika hodnot
       - pres mqtt umet nastavit periodu mereni - podpora je pripravena - potreba otestovat - hotovo
@@ -4180,6 +4562,8 @@ uint8_t blink_led_get_freq(uint8_t led_index)
     - umet nastavit bootloader priznak
 
   29 watchdog - potreba poradne otestovat
+     - pridana podpora pro jednotlive casti programu
+       - timer2, timer3, 05sec, 1sec, mqtt_loop, main_loop, 2 bity jeste volne
 
   30. ovladani svetel - hotovo
      - podpora pro zpetnou vazbu, napr praskla zarovka, light_state
@@ -4221,16 +4605,21 @@ uint8_t blink_led_get_freq(uint8_t led_index)
       - jen nekdy
 
   44. timeout pro navrat z menu - promyslet
+      - pouze ze setup_menu - hotovo
 
   45. restart needed priznak - hotovo
 
   46. pid regulator
-      - moznost nastavit cas regulace pres mqtt
-      - promyslet jestli jako vstupni promenou pro pid regulator vzit aktualni teplotu a nebo prumernou
+      - moznost nastavit cas regulace pres mqtt - hotovo
+      - promyslet jestli jako vstupni promenou pro pid regulator vzit aktualni teplotu a nebo prumernou - vzit aktualni hodnotu - hotovo
 
   47. do selfdiag pridat
       - mqtt_status - hotovo
+      - link_status - hotovo
 
+  48. vymyslet default_ring, kdyz neni zadny aktivni
+
+  49. pridat metriku kolik odebiram remote tds
 */
 
 
@@ -4249,9 +4638,10 @@ void loop()
   struct_DDS18s20 tds;
   uint8_t pipeno;
   uint8_t nrf_payload;
+  uint8_t id;
 
 
-  wdt_reset();
+
 
   load_2++;
 
@@ -4275,47 +4665,72 @@ void loop()
   }
 
   mqtt_client.loop();
+  sbi(watchdog_state, WD_MQTT_LOOP);
 
-  pid0.Compute();
-  pid1.Compute();
-  pid2.Compute();
-
-
-
-
-
-  if ( radio.available(&pipeno))
-  {
-    radio.read( &nrf_payload, 1 );
-    nrf_payload += 1;
-    radio.writeAckPayload(pipeno, &nrf_payload, 1 );
-  }
-
-
-  find_rs_device();
+  /* saric_pid
+    for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+      pidy[idx].Compute();
+  */
   /*
-    read_at(uart_recv);
-
-    if (start_at == 255)
+    if ( radio.available(&pipeno))
     {
-    start_at = 0;
-
-    new_parse_at(uart_recv, str1, str2);
-    id = atoi(str1);
-    cmd[0] = 0;
-    args[0] = 0;
-    new_parse_at(str2, cmd, args);
-
-
-    /////////////////////////////////////
-    ///prikazy pouze pro tuto jednotku
-    if (id == rsid)
-    {
-    }
+      radio.read( &nrf_payload, 1 );
+      nrf_payload += 1;
+      radio.writeAckPayload(pipeno, &nrf_payload, 1 );
     }
   */
 
+  if (scan_rf_net_enable == 1)
+  {
+    scan_rf_network(scan_rf_net_channel);
+    nrf_scan_check_cnt ++;
+    if (nrf_scan_check_cnt > 127)
+    {
+      scan_rf_net_channel++;
+      nrf_scan_check_cnt = 0;
+    }
+    if (scan_rf_net_channel > 127)
+    {
+      selftest_clear_0(SELFTEST_NRF_SCAN);
+      stop_scan_rf_network();
+      scan_rf_network_public();
+    }
+  }
 
+  if (serial_mode == RS_MODE_AT)
+  {
+    itmp = Serial.availableForWrite();
+
+    if ((SERIAL_TX_BUFFER_SIZE - 1 - itmp) > serial_max_used_tx)
+      serial_max_used_tx = (SERIAL_TX_BUFFER_SIZE - 1 - itmp);
+
+    if (itmp == (SERIAL_TX_BUFFER_SIZE - 1))
+    {
+      digitalWrite(rs485, LOW);
+      rs_death_time = RS_SEND_PAUSE;
+    }
+
+    read_at(uart_recv);
+    if (start_at == 255)
+    {
+      start_at = 0;
+
+      new_parse_at(uart_recv, str1, str2);
+      id = atoi(str1);
+      cmd[0] = 0;
+      args[0] = 0;
+      new_parse_at(str2, cmd, args);
+
+
+      /////////////////////////////////////
+      ///prikazy pouze pro tuto jednotku
+      if (id == rsid)
+      {
+      }
+    }
+
+
+  }
 
   led = 0;
   //led_old = 0;
@@ -4369,23 +4784,28 @@ void loop()
 
 
 
-
   term_mode = thermostat_ring_get_mode(default_ring);
   if (term_mode == TERM_MODE_OFF)
   {
     led = led + LED_OFF;
     blink_led_off(LED_PROG_I);
     blink_led_off(LED_ERR_I);
+    blink_led_off(LED_UP_I);
+    blink_led_off(LED_DOWN_I);
   }
   if (term_mode == TERM_MODE_MAX)
   {
     led = led + LED_MAX;
     blink_led_off(LED_PROG_I);
     blink_led_off(LED_ERR_I);
+    blink_led_off(LED_UP_I);
+    blink_led_off(LED_DOWN_I);
   }
   if (term_mode == TERM_MODE_PROG)
   {
     led = led + LED_PROG;
+    blink_led_off(LED_UP_I);
+    blink_led_off(LED_DOWN_I);
   }
   if (term_mode == TERM_MODE_MAN_HEAT)
   {
@@ -4393,11 +4813,13 @@ void loop()
     blink_led_off(LED_PROG_I);
     blink_led_off(LED_ERR_I);
   }
-  if (term_mode == TERM_MODE_CLIMATE)
+  if (term_mode == TERM_MODE_CLIMATE_MAX)
   {
     led = led + LED_CLIMA;
     blink_led_off(LED_PROG_I);
     blink_led_off(LED_ERR_I);
+    blink_led_off(LED_UP_I);
+    blink_led_off(LED_DOWN_I);
   }
   if (term_mode == TERM_MODE_MAN_COOL)
   {
@@ -4459,8 +4881,10 @@ void loop()
     if (key == TL_OK)
     {
       menu_next();
+      delay_show_menu = 0;
       key = 0;
     }
+
     if (key == TL_OFF)
     {
       thermostat_ring_set_mode(default_ring, TERM_MODE_OFF);
@@ -4484,7 +4908,7 @@ void loop()
     }
     if (key == TL_CLIMA)
     {
-      thermostat_ring_set_mode(default_ring, TERM_MODE_CLIMATE);
+      thermostat_ring_set_mode(default_ring, TERM_MODE_CLIMATE_MAX);
       menu_set_root_menu(&term_climate);
       delay_show_menu = 0;
       key = 0;
@@ -4504,6 +4928,7 @@ void loop()
     if (key_press == TL_OK)
     {
       menu_set_root_menu(&setup_menu);
+      delay_show_menu = 0;
       key_press = 0;
       key = 0;
     }
@@ -4517,11 +4942,20 @@ void loop()
   //////////////////// hlavni setup menu
   if (strcmp_P(curr_menu, title_setup_menu) == 0)
   {
-    if (key == TL_UP) menu_next();
-    if (key == TL_DOWN) menu_prev();
+    if (key == TL_UP)
+    {
+      menu_next();
+      delay_show_menu = 0;
+    }
+    if (key == TL_DOWN)
+    {
+      menu_prev();
+      delay_show_menu = 0;
+    }
     ////
     if (key == TL_OK)
     {
+      delay_show_menu = 0;
       /// podmenu jas
       if (strcmp_P(curr_item, title_item_setup_jas) == 0)
       {
@@ -4550,7 +4984,7 @@ void loop()
       //
       if (strcmp_P(curr_item, title_item_select_ring) == 0)
       {
-        setup_select_ring.args3 = default_ring;
+        setup_select_ring.args3 = rev_get_show_ring(default_ring);
         menu_set_root_menu(&setup_select_ring);
         key = 0;
       }
@@ -4571,6 +5005,13 @@ void loop()
         menu_set_root_menu(&menu_show_stav);
         key = 0;
       }
+      /// menu show pwm vykon
+      if (strcmp_P(curr_item, title_item_pwm_power) == 0)
+      {
+        menu_set_root_menu(&menu_pwm_power_show);
+        key = 0;
+      }
+
       /// menu zpet
       if (strcmp_P(curr_item, title_menu_back) == 0)
       {
@@ -4652,8 +5093,11 @@ void loop()
     }
     if (key == TL_OK)
     {
-      default_ring = setup_select_ring.args3;
-      set_default_ring(setup_select_ring.args3);
+      if (setup_select_ring.args2 != RING_FREE)
+      {
+        set_default_ring(setup_select_ring.args2);
+        default_ring = setup_select_ring.args2;
+      }
       menu_back_root_menu();
     }
   }
@@ -4706,6 +5150,16 @@ void loop()
       key = 0;
     }
   }
+  //////////////////////////
+  /// zobrazeni pwm vykonu
+  get_current_menu(curr_menu);
+  get_current_item(curr_item);
+  if (strcmp_P(curr_menu, title_item_pwm_power) == 0)
+    if (key == TL_OK)
+    {
+      menu_back_root_menu();
+      key = 0;
+    }
   /////////////////
   /// zobrazeni selftestu v decimalnim vyjadreni
   get_current_menu(curr_menu);
@@ -4716,7 +5170,6 @@ void loop()
       menu_back_root_menu();
       key = 0;
     }
-
   ///////////////////////////////////////////////////////////////////
   //// rucni nastaveni teploty
   get_current_menu(curr_menu);
@@ -4745,10 +5198,14 @@ void loop()
   //// reset
   //get_current_menu(curr_menu);
   //get_current_item(curr_item);
-
   //}
   /////////////////////////
   /// vraceni se zpet po 10 sec
+
+  if (strcmp_P(curr_menu, title_setup_menu) == 0)
+  {
+    if (delay_show_menu > 10) menu_back_root_menu();
+  }
   if (strcmp_P(curr_menu, title_term_off) == 0)
   {
     if (key == TL_OFF) menu_back_root_menu();
@@ -4762,12 +5219,12 @@ void loop()
   if (strcmp_P(curr_menu, title_term_prog) == 0)
   {
     if (key == TL_PROG) menu_back_root_menu();
-    if (delay_show_menu > 10) menu_back_root_menu();
+    if (delay_show_menu > 5) menu_back_root_menu();
   }
   if (strcmp_P(curr_menu, title_term_climate) == 0)
   {
     if (key == TL_CLIMA) menu_back_root_menu();
-    if (delay_show_menu > 10) menu_back_root_menu();
+    if (delay_show_menu > 5) menu_back_root_menu();
   }
   if (strcmp_P(curr_menu, title_error) == 0)
   {
@@ -4788,12 +5245,9 @@ void loop()
 
   ////////////////////
   /// kazdych 10sec
-  if ((milis - milis_10s) > 4540)
+  if ((milis - milis_10s) > 10000)
   {
     milis_10s = milis;
-
-
-
     device_get_name(str1);
     send_mqtt_onewire();
     send_mqtt_status();
@@ -4809,18 +5263,24 @@ void loop()
   }
 
 
-  if ((milis - milis_05s) > 225)
+  if ((milis - milis_05s) > 50)
   {
     milis_05s = milis;
     now = rtc.now();
     menu_display();
     digitalWrite(LED, 1);
+
+    if ((serial_mode == RS_MODE_AT) && (rs_start_find_device == 1))
+    {
+      find_rs_device();
+    }
+    sbi(watchdog_state, WD_05SEC);
   }
 
 
   ////////////////////
   /// kazdou 1sec
-  if ((milis - milis_1s) > 454)
+  if ((milis - milis_1s) > 1000)
   {
     delay_show_menu++;
     milis_1s = milis;
@@ -4831,6 +5291,15 @@ void loop()
     device_get_name(str1);
     send_mqtt_payload(str2, str1);
 
+    for (uint8_t idx = 0; idx < MAX_RS_DEVICE; idx++)
+    {
+      if (rs_device[idx].type != RS_NONE)
+      {
+        if (rs_device[idx].last_seen < 60)
+          rs_device[idx].last_seen++;
+      }
+    }
+    serial_max_used_tx = 0;
 
     selftest();
 
@@ -4843,15 +5312,22 @@ void loop()
     if (use_prog > 0) use_prog = use_prog - 1;
     menu_item_update_limits(&item_set_select_prog, 0, use_prog);
 
+
     /// nastaveni dynamickeho menu teplomeru
     use_tds = count_use_tds();
     use_tds = use_tds + count_use_rtds();
     if (use_tds > 0) use_tds = use_tds - 1;
     menu_item_update_limits(&item_show_temp, 0, use_tds);
 
+    ///
     use_light = count_use_light();
     if (use_light > 0) use_light = use_light - 1;
     menu_item_update_limits(&item_select_osvetleni, 0, use_light);
+
+    /// nastaveni dynamickeho menu vyberu ringu termostatu
+    use_ring = count_use_active_rings();
+    if (use_ring > 0) use_ring = use_ring - 1;
+    menu_item_update_limits(&item_set_select_ring, 0, use_ring);
 
     /// automaticke nastaveni jasu displaye
     aktual_light = analogRead(LIGHT);
@@ -4861,20 +5337,87 @@ void loop()
       if (itmp > 240) itmp = 240;
       analogWrite(PWM_DISP, itmp);
     }
-
-
-
-
+    sbi(watchdog_state, WD_1SEC);
   }
 
 
+  if ((milis - milis_1ms) > 0)
+  {
+    milis_1ms = milis;
+    if (rs_death_time > 1)
+      rs_death_time--;
+    sbi(watchdog_state, WD_2MSEC);
 
+  }
 
+  sbi(watchdog_state, WD_MAIN_LOOP);
+  sbi(watchdog_state, WD_FREE);
 
+  if (watchdog_state == 255)
+  {
+    watchdog_state = 0;
+    wdt_reset();
+  }
+
+}
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+void start_scan_rf_network(void)
+{
+  scan_rf_net_enable = 1;
+  scan_rf_net_channel = 0;
+  nrf_scan_check_cnt = 0;
+  for (uint8_t chan = 0; chan < 128; chan++) nrf_used_channels[chan] = 0;
+  radio.startListening();
+  radio.stopListening();
+  for (uint8_t pipe = 1; pipe < 6; pipe++)
+    radio.closeReadingPipe(pipe);
+}
+
+void scan_rf_network(uint8_t channel)
+{
+  if (channel < 128)
+  {
+    radio.setChannel(channel);
+    radio.startListening();
+    delayMicroseconds(128);
+    radio.stopListening();
+    if (radio.testCarrier())
+      nrf_used_channels[channel]++;
+  }
+}
+
+void stop_scan_rf_network(void)
+{
+  scan_rf_net_enable = 0;
+  scan_rf_net_channel = 0;
+  nrf_scan_check_cnt = 0;
+  radio.setChannel(nrf_load_channel());
 }
 
 
-
+void scan_rf_network_public(void)
+{
+  char topic[16];
+  char payload[128];
+  char tmp1[8];
+  char tmp2[8];
+  strcpy(topic, "rf/used");
+  for (uint8_t radek = 0; radek < 8; radek++)
+  {
+    itoa(radek, tmp1, 16);
+    strcpy(payload, "0x");
+    strcat(payload, tmp1);
+    strcat(payload, " :");
+    for (uint8_t sloupec = 0; sloupec < 16; sloupec++)
+    {
+      itoa(nrf_used_channels[(radek * 15) + sloupec], tmp1, 10);
+      strcat(payload, tmp1);
+      strcat(payload, " ");
+    }
+    send_mqtt_general_payload(topic, payload);
+  }
+}
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void parseBytes(const char* str, char sep, byte* bytes, int maxBytes, int base) {
@@ -4929,27 +5472,29 @@ void getInt(uint8_t *ar, float x)
 }
 
 ///////////////////////////////////////////////////////
-//// cteni zapis eeprom float datovy typ
-float EEPROMreadFloat(unsigned int addr)
-{
+/*
+  //// cteni zapis eeprom float datovy typ
+  float EEPROMreadFloat(unsigned int addr)
+  {
   union {
     byte b[4];
     float f;
   } data;
   for (int i = 0; i < 4; i++) data.b[i] = EEPROM.read(addr + i);
   return data.f;
-}
+  }
 
-void EEPROMwriteFloat(unsigned int addr, float x)
-{
+
+  void EEPROMwriteFloat(unsigned int addr, float x)
+  {
   union {
     byte b[4];
     float f;
   } data;
   data.f = x;
   for (int i = 0; i < 4; i++) EEPROM.write(addr + i, data.b[i]);
-}
-
+  }
+*/
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -4957,11 +5502,9 @@ void EEPROMwriteFloat(unsigned int addr, float x)
 ISR(TIMER2_OVF_vect)
 {
   uint8_t backup = SREG;
-  timer2_counter++;
-  if (timer2_counter < 30)
-    timer2_counter = 0;
-  load2 = load_2;
-  load_2 = 0;
+  TCNT2 = timer2_counter;
+  milis++;
+  sbi(watchdog_state, WD_TIMER2);
   SREG = backup;
 }
 
@@ -4970,7 +5513,6 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
 {
   uint8_t backup = SREG;
   TCNT3 = timer3_counter;   // preload timer
-  milis++;
   digitalWrite(tr1, 1);
   digitalWrite(tr2, 1);
   digitalWrite(tr3, 1);
@@ -5016,6 +5558,7 @@ ISR(TIMER3_OVF_vect)        // interrupt service routine
   }
   display_pos++;
   if (display_pos == 6) display_pos = 0;
+  sbi(watchdog_state, WD_TIMER3);
   SREG = backup;
 }
 
@@ -5083,16 +5626,7 @@ uint8_t Bit_Reverse( uint8_t x )
     ladeni = 0;
   }
 
-  if (scan_rf_net_enable == 1)
-  {
-    scan_rf_network(scan_rf_net_channel);
-    scan_rf_net_channel++;
-    if (scan_rf_net_channel > 127)
-    {
-      stop_scan_rf_network();
-      scan_rf_network_public();
-    }
-  }
+
 
   //  if (nrf_interupt_enable == 1)
   //  {
@@ -5124,96 +5658,10 @@ uint8_t Bit_Reverse( uint8_t x )
     }
 
 
-     //// /thermctl-in/XXXX/rf/scan - 0|1 zapnuti/vypnuti scanovani rf site
-  strcpy_P(str1, thermctl_header_in);
-  strcat(str1, device.nazev);
-  strcat(str1, "/rf/scan");
-  if (strcmp(str1, topic) == 0)
-  {
-    if (atoi(payload) == 1)
-    {
-
-      start_scan_rf_network();
-    }
-    else
-    {
-      stop_scan_rf_network();
-      scan_rf_network_public();
-    }
-  }
-  ///// //thermctl-in/XXXX/rf/stat - statisticke informace
-  strcpy_P(str1, thermctl_header_in);
-  strcat(str1, device.nazev);
-  strcat(str1, "/rf/stat");
-  {
-    ladeni = ladeni + 1;
-  }
 
 
-  void start_scan_rf_network(void)
-  {
-  scan_rf_net_enable = 1;
-  scan_rf_net_channel = 0;
-  for (uint8_t chan = 0; chan < 128; chan++) used_channels[chan] = 0;
-  //nRF.setAutoAck(false);
-  nRF.startListening();
-  nRF.stopListening();
-  for (uint8_t pipe = 1; pipe < 6; pipe++)
-    nRF.closeReadingPipe(pipe);
-
-  }
-
-  void scan_rf_network(uint8_t channel)
-  {
-  uint8_t rep = 0;
-  if (channel < 128)
-  {
-    nRF.setChannel(channel);
-    while (rep < 128)
-    {
-
-      nRF.startListening();
-      delayMicroseconds(128);
-      nRF.stopListening();
-      if (nRF.testCarrier())
-        used_channels[channel]++;
-      rep++;
-    }
-  }
-  }
-
-  void stop_scan_rf_network(void)
-  {
-  scan_rf_net_enable = 0;
-  scan_rf_net_channel = 0;
-  nRF.setChannel(device.nrf_channel);
-  }
 
 
-  void scan_rf_network_public(void)
-  {
-  char topic[64];
-  char payload[128];
-  char tmp1[8];
-  char tmp2[8];
-  strcpy_P(topic, thermctl_header_out);
-  strcat(topic, device.nazev);
-  strcat(topic, "/rf/used");
-  for (uint8_t radek = 0; radek < 8; radek++)
-  {
-    itoa(radek, tmp1, 16);
-    strcpy(payload, "0x");
-    strcat(payload, tmp1);
-    strcat(payload, " :");
-    for (uint8_t sloupec = 0; sloupec < 16; sloupec++)
-    {
-      itoa(used_channels[(radek * 15) + sloupec], tmp1, 10);
-      strcat(payload, tmp1);
-      strcat(payload, " ");
-    }
-    mqtt_client.publish(topic, payload);
-  }
-  }
 */
 
 /*
