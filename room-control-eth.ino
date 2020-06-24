@@ -13,7 +13,11 @@
 #include <avr/wdt.h>
 #include "nRF24L01.h"
 #include "RF24.h"
+#include "RF24Network.h"
+#include "RF24Mesh.h"
+
 #include "printf.h"
+
 
 #include <avr/pgmspace.h>
 #include "font_alfa.h"
@@ -22,12 +26,12 @@
 #include <avr/boot.h>
 
 #include <RTClib.h>
-#include <saric_ds2482.h>
-#include <ow.h>
+
 #include <EEPROM.h>
 #include "saric_thermostat.h"
 #include "saric_tds_function.h"
 #include "saric_mqtt_network.h"
+#include "saric_nrf.h"
 
 #define RS_MODE_SERIAL 0
 #define RS_MODE_AT 1
@@ -149,48 +153,11 @@
 #define MAX_ITEMS_ROOT_MENU 12
 #define MAX_HISTORY 5
 
-#define MAX_AVG_TEMP 10
+
 
 StaticJsonDocument<512> doc;
 
-struct struct_ds2482
-{
-  uint8_t i2c_addr;
-  uint8_t HWwirenum;
-};
 
-struct struct_1w_rom
-{
-  uint8_t rom[8];
-  uint8_t assigned_ds2482;
-  uint8_t used;
-};
-
-/*
-  typedef struct struct_DDS18s20
-  {
-  uint8_t used;
-  uint8_t rom[8];
-  uint8_t assigned_ds2482;
-  int offset;
-  char name[8];
-  uint8_t period;
-  };
-*/
-
-typedef struct struct_status_DDS18s20
-{
-  uint8_t tempL;
-  uint8_t tempH;
-  uint8_t CR;
-  uint8_t CP;
-  uint8_t CRC;
-  int temp;
-  int average_temp[MAX_AVG_TEMP];
-  uint8_t online;
-  uint8_t period_now;
-  uint8_t wait;
-};
 
 typedef void (*function)(uint8_t args, uint8_t *ret, char *tmp);
 
@@ -256,14 +223,7 @@ typedef struct StructRSDevice
 #define remote_tds_name3  1480
 #define remote_tds_name4  1490
 
-#define eeprom_nrf_channel 1500
-#define nrf_write_name 1501
-#define nrf_read1_name 1506
-#define nrf_read2_name 1511
-#define nrf_read3_name 1512
-#define nrf_read4_name 1513
-#define nrf_read5_name 1514
-#define nrf_power 1515
+
 
 #define light_output_0 1516
 #define light_output_7 1523
@@ -284,17 +244,14 @@ PubSubClient mqtt_client(ethClient);
 
 
 RF24 radio(NRF_CE, NRF_CS);
+RF24Network network(radio);
+RF24Mesh mesh(radio, network);
 
 
 
 
 
 
-struct_1w_rom w_rom[HW_ONEWIRE_MAXROMS];
-struct_ds2482 ds2482_address[1];
-struct_status_DDS18s20 status_tds18s20[HW_ONEWIRE_MAXROMS];
-uint8_t Global_HWwirenum = 0;
-uint8_t tmp_rom[8];
 uint8_t key = 0;
 uint8_t key_now = 0;
 uint8_t key_press = 0;
@@ -311,10 +268,10 @@ uint8_t display_pos;
 uint8_t jas_disp, jas_key;
 uint16_t statisice = 0;
 uint16_t destisice = 0;
-uint16_t  tisice = 0;
-uint16_t  stovky = 0;
-uint16_t  desitky = 0;
-uint16_t  jednotky = 0;
+uint16_t tisice = 0;
+uint16_t stovky = 0;
+uint16_t desitky = 0;
+uint16_t jednotky = 0;
 uint8_t tecka = 0;
 long int milis = 0;
 long int milis_05s = 0;
@@ -322,17 +279,18 @@ long int milis_1s = 0;
 long int milis_10s = 0;
 long int milis_1ms = 0;
 long int milis_key = 0;
-uint32_t load2 = 0;
-uint32_t load_2 = 0;
-uint16_t aktual_light = 0;
+uint16_t light_curr = 0;
 uint8_t delay_show_menu = 0;
 uint8_t start_at = 0;
 uint8_t re_at = 0;
 uint8_t r_id = 0;
 char uart_recv[UART_RECV_MAX_SIZE];
-char mqtt_log[128];
-uint8_t mqtt_log_cnt = 0;
+
 uint8_t default_ring = 0;
+
+unsigned long load = 0;
+unsigned long load_max = 0;
+unsigned long load_min = 0xffffffff;
 
 StructRSDevice rs_device[MAX_RS_DEVICE];
 uint8_t rs_find = 0;
@@ -341,12 +299,9 @@ uint8_t serial_mode = 0;
 uint8_t serial_max_used_tx = 0;
 uint8_t rs_start_find_device = 0;
 
-byte nrf_addresses[][6] = {"1Node", "2Node"};
-uint8_t scan_rf_net_enable = 0;
-uint8_t scan_rf_net_channel = 0;
-uint8_t nrf_scan_check_cnt = 0;
-uint8_t nrf_used_channels[128];
-
+uint16_t light_min = 0;
+uint16_t light_max = 0;
+uint8_t auto_jas = 0;
 
 
 
@@ -362,13 +317,14 @@ uint8_t use_tds = 0;
 uint8_t use_rtds = 0;
 uint8_t use_prog = 0;
 uint8_t use_light = 0;
+uint8_t use_light_curr = 0;
 uint8_t use_ring = 0;
 int remote_tds[5];
 int remote_tds_last_update[5];
 uint8_t light_value[MAX_SVETEL];
 uint8_t light_state[MAX_SVETEL];
 
-
+uint8_t last_output_update[MAX_THERMOSTAT];
 
 
 
@@ -1177,61 +1133,7 @@ void time_set_offset(uint8_t offset)
 {
   EEPROM.write(time_offset, offset);
 }
-/**************************** Nastaveni NRF24L01 ****************/
-/// ulozi cislo kanalu do eeprom
-void nrf_save_channel(uint8_t channel)
-{
-  EEPROM.write(eeprom_nrf_channel, channel);
-}
 
-uint8_t nrf_load_channel(void)
-{
-  return EEPROM.read(eeprom_nrf_channel);
-}
-
-void nrf_save_power(rf24_pa_dbm_e power)
-{
-  EEPROM.write(nrf_power, power);
-}
-
-rf24_pa_dbm_e nrf_load_power(void)
-{
-  return EEPROM.read(nrf_power);
-}
-
-void nrf_save_write_name(uint8_t *nazev)
-{
-  for (uint8_t idx = 0; idx < 5; idx++)
-  {
-    EEPROM.write(nrf_write_name + idx, nazev[idx]);
-  }
-}
-
-void nrf_load_write_name(uint8_t *nazev)
-{
-  for (uint8_t idx = 0; idx < 5; idx++)
-  {
-    nazev[idx] = EEPROM.read(nrf_write_name + idx);
-  }
-}
-
-void nrf_save_read_name(uint8_t channel, uint8_t *nazev)
-{
-  if (channel == 0)
-    for (uint8_t idx = 0; idx < 5; idx++)
-      EEPROM.write(nrf_read1_name + idx, nazev[idx]);
-  if (channel > 0)
-    EEPROM.write(nrf_read2_name + channel - 1, nazev[0]);
-}
-
-void nrf_load_read_name(uint8_t channel, uint8_t *nazev)
-{
-  for (uint8_t idx = 0; idx < 5; idx++)
-    nazev[idx] = EEPROM.read(nrf_read1_name + idx);
-
-  if (channel > 0)
-    nazev[0] = EEPROM.read(nrf_read2_name + channel - 1);
-}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////
 void show_temp_default(uint8_t cnt, uint8_t *ret_data, char *text)
@@ -1380,15 +1282,30 @@ void show_time(void)
 }
 
 
-
-
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void send_know_device(void)
+{
+  char str_topic[64];
+  char payload[64];
+  for (uint8_t idx = 0; idx < MAX_KNOW_MQTT; idx++)
+  {
+    if (know_mqtt[idx].type != TYPE_FREE)
+    {
+      itoa(know_mqtt[idx].type, payload, 10);
+      send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "know_mqtt_device", idx, "type", payload);
+      itoa(know_mqtt[idx].last_update, payload, 10);
+      send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "know_mqtt_device", idx, "last_update", payload);
+      strcpy(payload, know_mqtt[idx].device);
+      send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "know_mqtt_device", idx, "device", payload);
+    }
+  }
+}
 
 
 
 void send_device_status(void)
 {
   char str_topic[64];
-  char hostname[10];
   char payload[64];
   if (mqtt_client.connected())
   {
@@ -1397,16 +1314,27 @@ void send_device_status(void)
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
     ///
     strcpy(str_topic, "status/brigthness");
-    itoa(aktual_light, payload, 10);
+    itoa(light_curr, payload, 10);
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
     ///
     strcpy(str_topic, "status/light");
     itoa(jas_disp, payload, 10);
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
     ///
-    strcpy(str_topic, "status/load");
-    itoa(load2, payload, 10);
+    strcpy(str_topic, "status/auto_brigthness");
+    itoa(auto_jas, payload, 10);
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
+    ///
+    strcpy(str_topic, "status/load_min");
+    itoa(load_min, payload, 10);
+    send_mqtt_general_payload(&mqtt_client, str_topic, payload);
+    ///
+    strcpy(str_topic, "status/load_max");
+    itoa(load_max, payload, 10);
+    send_mqtt_general_payload(&mqtt_client, str_topic, payload);
+    ///
+    load_max = 0;
+    load_min = 0xffffffff;
     ///
     strcpy(str_topic, "status/default_ring");
     itoa(default_ring, payload, 10);
@@ -1426,7 +1354,7 @@ void send_device_status(void)
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
 
     strcpy(str_topic, "status/light/count");
-    itoa(use_light, payload, 10);
+    itoa(use_light_curr, payload, 10);
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
 
     strcpy(str_topic, "rs485/mode");
@@ -1440,6 +1368,10 @@ void send_device_status(void)
     strcpy(str_topic, "rs485/queue/tx");
     itoa(serial_max_used_tx, payload, 10);
     send_mqtt_general_payload(&mqtt_client, str_topic, payload);
+    serial_max_used_tx = 0;
+
+    itoa(time_get_offset(), payload, 10);
+    send_mqtt_general_payload(&mqtt_client, "time/ntp_offset", payload);
 
   }
 }
@@ -1456,10 +1388,10 @@ void send_mqtt_onewire(void)
   send_mqtt_general_payload(&mqtt_client, "1wire/count", payload);
   for (uint8_t i = 0; i < Global_HWwirenum; i++)
   {
-    createString(payload, ':', w_rom[i].rom, 8, 16);
+    //sariccreateString(payload, ':', w_rom[i].rom, 8, 16);
     send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "1wire", i, "rom", payload);
     ///
-    itoa(w_rom[i].assigned_ds2482, payload, 10);
+    //saricitoa(w_rom[i].assigned_ds2482, payload, 10);
     send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "1wire", i, "assigned", payload);
   }
 }
@@ -1567,6 +1499,9 @@ void send_mqtt_ring(void)
 
       itoa(thermostat_ring_get_status_data(idx), payload, 10);
       send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "ring", idx, "status_bites", payload);
+
+      itoa(last_output_update[idx], payload, 10);
+      send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "ring", idx, "output_update", payload);
     }
 }
 ///
@@ -1749,55 +1684,32 @@ void mqtt_send_light_value(uint8_t idx)
 ////
 ////
 ////
-//// thermctl-out/XXXXX/network/mac
-//// thermctl-out/XXXXX/network/ip
-//// thermctl-out/XXXXX/network/netmask
-//// thermctl-out/XXXXX/network/gw
-//// thermctl-out/XXXXX/network/dns
-//// thermctl-out/XXXXX/network/ntp
-//// thermctl-out/XXXXX/network/mqtt_host
-//// thermctl-out/XXXXX/network/mqtt_port
-//// thermctl-out/XXXXX/network/mqtt_user
-//// thermctl-out/XXXXX/network/mqtt_key
-//// thermctl-out/XXXXX/network/name
-void send_network_config(void)
-{
-  char payload[20];
-  payload[0] = 0;
-  createString(payload, ':', device.mac, 6, 16);
-  send_mqtt_general_payload(&mqtt_client, "network/mac", payload);
-  payload[0] = 0;
-  createString(payload, '.', device.myIP, 4, 10);
-  send_mqtt_general_payload(&mqtt_client, "network/ip", payload);
-  payload[0] = 0;
-  createString(payload, '.', device.myMASK, 4, 10);
-  send_mqtt_general_payload(&mqtt_client, "network/netmask", payload);
 
-  payload[0] = 0;
-  createString(payload, '.', device.myGW, 4, 10);
-  send_mqtt_general_payload(&mqtt_client, "network/gw", payload);
-
-  payload[0] = 0;
-  createString(payload, '.', device.myDNS, 4, 10);
-  send_mqtt_general_payload(&mqtt_client, "network/dns", payload);
-
-  payload[0] = 0;
-  createString(payload, '.', device.ntp_server, 4, 10);
-  send_mqtt_general_payload(&mqtt_client, "network/ntp", payload);
-
-  payload[0] = 0;
-  createString(payload, '.', device.mqtt_server, 4, 10);
-  send_mqtt_general_payload(&mqtt_client, "network/mqtt_host", payload);
-
-  itoa(device.mqtt_port, payload, 10);
-  send_mqtt_general_payload(&mqtt_client, "network/mqtt_port", payload);
-  send_mqtt_general_payload(&mqtt_client, "network/mqtt_user", device.mqtt_user);
-  send_mqtt_general_payload(&mqtt_client, "network/mqtt_key", device.mqtt_key);
-  send_mqtt_general_payload(&mqtt_client, "network/name", device.nazev);
-  itoa(time_get_offset(), payload, 10);
-  send_mqtt_general_payload(&mqtt_client, "time/ntp_offset", payload);
-}
 ////
+
+void send_mesh_status(void)
+{
+  char str_topic[64];
+  char payload[64];
+
+  strcpy(str_topic, "rf/mesh/id");
+  itoa(mesh.getNodeID(), payload, 10);
+  send_mqtt_general_payload(&mqtt_client, str_topic, payload);
+
+  strcpy(str_topic, "rf/mesh/neighbour/count");
+  itoa(mesh.addrListTop, payload, 10);
+  send_mqtt_general_payload(&mqtt_client, str_topic, payload);
+
+  for (uint8_t idx = 0; idx < mesh.addrListTop; idx++)
+  {
+    itoa(mesh.addrList[idx].nodeID, payload, 10);
+    send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "rf/mesh/neighbour", idx, "id", payload);
+    itoa(mesh.addrList[idx].address, payload, 10);
+    send_mqtt_message_prefix_id_topic_payload(&mqtt_client, "rf/mesh/neighbour", idx, "address", payload);
+  }
+
+
+}
 ////
 ////
 ////////////////////////////////////////////////////////////////
@@ -1834,7 +1746,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   char str1[64];
   const char tmp1[16];
   char tmp2[16];
-  char my_payload[128];
+  static char my_payload[128];
   boolean ret = 0;
   uint8_t cnt = 0;
   uint8_t id = 0;
@@ -1843,11 +1755,11 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   char *pch;
   uint8_t active;
   NTPClient timeClient(udpClient);
-  //for (uint8_t j = 0; j < 128; j++) my_payload[j] = 0;
+  for (uint8_t j = 0; j < 128; j++) my_payload[j] = 0;
   ////
 
   mqtt_receive_message++;
-  strncpy(my_payload, payload, length);
+  strncpy(my_payload, (char*) payload, length);
 
   strcpy_P(str1, termbig_subscribe);
   if (strcmp(str1, topic) == 0)
@@ -1882,20 +1794,10 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    createString(tmp1, '.', device.ntp_server, 4, 10);
-    timeClient.begin();
-    timeClient.setTimeOffset(3600 * time_get_offset());
-    timeClient.setPoolServerName(tmp1);
-    if (timeClient.update() == false)
-    {
-      sbi(selftest_data, SELFTEST_ERR_NTP);
-    }
-    else
-    {
+    if (ntp_update(&timeClient, &rtc, time_get_offset()) == 1)
       cbi(selftest_data, SELFTEST_ERR_NTP);
-      rtc.adjust(DateTime(timeClient.getYear(), timeClient.getMonth() , timeClient.getDate(), timeClient.getHours(), timeClient.getMinutes(), timeClient.getSeconds()));
-    }
-    timeClient.end();
+    else
+      sbi(selftest_data, SELFTEST_ERR_NTP);
   }
   //// /termbig-in/global/time/offset - nastaveni offsetu casu
   strcpy_P(str1, thermctl_header_in);
@@ -1903,7 +1805,6 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    //strncpy(str2, payload, length);
     time_set_offset(atoi(my_payload));
   }
 
@@ -1917,7 +1818,6 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    //strncpy(str2, payload, length);
     uint16_t t_led_blink = atoi(my_payload);
     led_blink_1 = t_led_blink;
     led_blink_2 = t_led_blink >> 8;
@@ -1930,8 +1830,8 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    //strncpy(str2, payload, length);
     cnt = atoi(my_payload);
+    cnt = cnt & 0b00001111;
     jas_disp = 255 - (15 * cnt);
     EEPROM.write(my_jas_disp, jas_disp);
     analogWrite(PWM_DISP, jas_disp);
@@ -1944,7 +1844,6 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    //strncpy(str2, payload, length);
     cnt = atoi(my_payload);
     EEPROM.write(my_jas_key, cnt);
     analogWrite(PWM_KEY, cnt);
@@ -1958,7 +1857,6 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    //strncpy(str2, payload, length);
     keyboard_set_sense(atoi(my_payload));
     keyboard_apply_sense();
   }
@@ -1969,15 +1867,16 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   strcat(str1, "/rf/scan");
   if (strcmp(str1, topic) == 0)
   {
+    mqtt_process_message++;
     if (atoi(my_payload) == 1)
     {
-      start_scan_rf_network();
+      start_scan_rf_network(&radio);
       selftest_set_0(SELFTEST_NRF_SCAN);
     }
     else
     {
-      stop_scan_rf_network();
-      scan_rf_network_public();
+      stop_scan_rf_network(&radio);
+      scan_rf_network_public(&mqtt_client);
       selftest_clear_0(SELFTEST_NRF_SCAN);
     }
   }
@@ -1985,9 +1884,23 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   strcpy_P(str1, thermctl_header_in);
   strcat(str1, device.nazev);
   strcat(str1, "/rf/stat");
+  if (strcmp(str1, topic) == 0)
   {
-   /// TODO dodelt nrf_printdetails
+    mqtt_process_message++;
+    scan_rf_net_enable = 2;
   }
+
+  //// /thermctl-in/XXXX/rf/set/channel
+  //// nastaveni vysilacihi/prijmaciho kanalu
+  strcpy_P(str1, thermctl_header_in);
+  strcat(str1, device.nazev);
+  strcat(str1, "/rf/set/channel");
+  if (strcmp(str1, topic) == 0)
+  {
+    mqtt_process_message++;
+  }
+
+
 
   //// /thermctl-in/XXXX/tds/associate - asociace do tds si pridam mac 1wire - odpoved je pod jakem ID to mam ulozeno
   strcpy_P(str1, thermctl_header_in);
@@ -1996,31 +1909,9 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    //strncpy(str2, payload, length);
     id = atoi(my_payload);
-    if ( id < Global_HWwirenum)
-    {
-      for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXDEVICES; idx++)
-      {
-        get_tds18s20(idx, &tds);
-        if (tds.used == 0 && w_rom[id].used == 1)
-        {
-          tds.used = 1;
-          for (uint8_t i = 0; i < 8; i++)
-            tds.rom[i] = w_rom[id].rom[i];
-          tds.assigned_ds2482 = ds2482_address[w_rom[idx].assigned_ds2482].i2c_addr;
-          set_tds18s20(idx, &tds);
-          for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXROMS; idx++)
-            for (uint8_t cnt = 0; cnt < MAX_AVG_TEMP; cnt++)
-              status_tds18s20[idx].average_temp[cnt] = 20000;
-          break;
-        }
-      }
-    }
-    else
-    {
-      log_error("tds/associate bad id");
-    }
+    if (tds_associate(id) == 0)
+      log_error(&mqtt_client, "tds/associate bad id");
   }
   ///
   //// /thermctl-in/XXXX/tds/set/IDcko/name - nastavi cidlu nazev
@@ -2053,7 +1944,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       }
       else
       {
-        log_error("tds/set bad id");
+        log_error(&mqtt_client, "tds/set bad id");
       }
       pch = strtok (NULL, "/");
       cnt++;
@@ -2072,7 +1963,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
     if (id < HW_ONEWIRE_MAXROMS)
       tds_set_clear(id);
     else
-      log_error("tds/clear bad id");
+      log_error(&mqtt_client, "tds/clear bad id");
   }
   ////
   ////
@@ -2110,7 +2001,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       }
       else
       {
-        log_error("rtds/set bad id");
+        log_error(&mqtt_client, "rtds/set bad id");
       }
       pch = strtok (NULL, "/");
       cnt++;
@@ -2133,7 +2024,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
     }
     else
     {
-      log_error("rtds/clear bad id");
+      log_error(&mqtt_client, "rtds/clear bad id");
     }
   }
   //// ziska nastaveni remote_tds
@@ -2202,7 +2093,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       }
       else
       {
-        log_error("prog/set bad id");
+        log_error(&mqtt_client, "prog/set bad id");
       }
       pch = strtok (NULL, "/");
       cnt++;
@@ -2238,7 +2129,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
     }
     else
     {
-      log_error("prog/clear bad id");
+      log_error(&mqtt_client, "prog/clear bad id");
     }
   }
   /////
@@ -2271,7 +2162,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       }
       else
       {
-        log_error("prog_interval/set bad id");
+        log_error(&mqtt_client, "prog_interval/set bad id");
       }
       pch = strtok (NULL, "/");
       cnt++;
@@ -2315,7 +2206,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       }
       else
       {
-        log_error("ring/set bad id");
+        log_error(&mqtt_client, "ring/set bad id");
       }
       pch = strtok (NULL, "/");
       cnt++;
@@ -2391,7 +2282,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       }
       else
       {
-        log_error("ring/set bad id");
+        log_error(&mqtt_client, "ring/set bad id");
       }
       pch = strtok (NULL, "/");
       cnt++;
@@ -2414,7 +2305,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
     }
     else
     {
-      log_error("ring/clear bad id");
+      log_error(&mqtt_client, "ring/clear bad id");
     }
   }
   ////
@@ -2425,7 +2316,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strncmp(str1, topic, strlen(str1)) == 0)
   {
     mqtt_process_message++;
-    send_network_config();
+    send_network_config(&mqtt_client);
   }
   /// nastaveni site
   //// thermctl-in/XXXXX/network/set/mac
@@ -2445,7 +2336,6 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strncmp(str1, topic, strlen(str1)) == 0)
   {
     mqtt_process_message++;
-    //strncpy(str2, payload, length);
     cnt = 0;
     for (uint8_t f = strlen(str1); f < strlen(topic); f++)
     {
@@ -2453,70 +2343,14 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       str1[cnt + 1] = 0;
       cnt++;
     }
-    cnt = 0;
-    pch = strtok (str1, "/");
-    while (pch != NULL)
-    {
-      if (strcmp(pch, "mac") == 0)
-      {
-        parseBytes(my_payload, ':', device.mac, 6, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "ip") == 0)
-      {
-        parseBytes(my_payload, '.', device.myIP, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "netmask") == 0)
-      {
-        parseBytes(my_payload, '.', device.myMASK, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "gw") == 0)
-      {
-        parseBytes(my_payload, '.', device.myGW, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "dns") == 0)
-      {
-        parseBytes(my_payload, '.', device.myDNS, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "ntp") == 0)
-      {
-        parseBytes(my_payload, '.', device.ntp_server, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "mqtt_host") == 0)
-      {
-        parseBytes(my_payload, '.', device.mqtt_server, 4, 10);
-        cnt = 1;
-      }
-      if (strcmp(pch, "mqtt_port") == 0)
-      {
-        device.mqtt_port = atoi(my_payload);
-        cnt = 1;
-      }
-      if (strcmp(pch, "mqtt_user") == 0)
-      {
-        strcpy(device.mqtt_user, my_payload);
-        cnt = 1;
-      }
-      if (strcmp(pch, "mqtt_pass") == 0)
-      {
-        strcpy(device.mqtt_key, my_payload);
-        cnt = 1;
-      }
-      if (strcmp(pch, "name") == 0)
-      {
-        device_set_name(my_payload);
-        cnt = 1;
-      }
-      pch = strtok (NULL, "/");
-    }
+    cnt = setting_network(str1, my_payload);
     if (cnt == 1)
     {
       save_setup_network();
+      sbi(selftest_data, SELFTEST_RESTART_NEEDED);
+    }
+    if (cnt == 2)
+    {
       sbi(selftest_data, SELFTEST_RESTART_NEEDED);
     }
   }
@@ -2548,8 +2382,40 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
       cnt++;
     }
   }
-
-
+  ///
+  /// zpetna vazba od vystupu
+  strcpy_P(str1, termbig_header_out);
+  strcat(str1, "output/");
+  if (strncmp(str1, topic, strlen(str1)) == 0)
+  {
+    mqtt_process_message++;
+    cnt = 0;
+    for (uint8_t f = strlen(str1); f < strlen(topic); f++)
+    {
+      str1[cnt] = topic[f];
+      str1[cnt + 1] = 0;
+      cnt++;
+    }
+    cnt = 0;
+    pch = strtok (str1, "/");
+    while (pch != NULL)
+    {
+      if (cnt == 0) id = atoi(pch);
+      if (cnt == 1)
+      {
+        for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+          if (thermostat_ring_get_output(idx) == id)
+          {
+            if (strcmp(pch, "pwm")) last_output_update[id] = 0;
+            if (strcmp(pch, "state")) last_output_update[id] = 0;
+            break;
+          }
+      }
+      pch = strtok (NULL, "/");
+      cnt++;
+    }
+  }
+  ///
   //// /thermctl-in/rs485/set/mode
   /// serial-half-duplex generic
   /// at
@@ -2602,7 +2468,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    log_error("reload ..... ");
+    log_error(&mqtt_client, "reload ..... ");
     resetFunc();
   }
 
@@ -2613,7 +2479,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
   if (strcmp(str1, topic) == 0)
   {
     mqtt_process_message++;
-    log_error("bootloader ..... ");
+    log_error(&mqtt_client, "bootloader ..... ");
     EEPROM.write(bootloader_tag, 255);
     wdt_enable(WDTO_1S);
     while (1);
@@ -2662,6 +2528,15 @@ byte mqtt_reconnect(void)
       strcpy_P(topic, lightctl_header_out);
       strcat(topic, "/#");
       mqtt_client.subscribe(topic);
+
+      strcpy_P(topic, thermctl_subscribe);
+      mqtt_client.subscribe(topic);
+
+      strcpy_P(topic, termbig_subscribe);
+      mqtt_client.subscribe(topic);
+      /// zpetna vazba od vystupu
+      strcpy_P(topic, termbig_header_out);
+      mqtt_client.subscribe(topic);
     }
   ret = mqtt_client.state();
   return ret;
@@ -2695,103 +2570,7 @@ void remote_tds_unsubscibe_topic(uint8_t idx)
     mqtt_client.unsubscribe(tmp2);
   }
 }
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//*************************************************************************************************************//
-/////vyhledani zarizeni na hw 1wire sbernici////////
-uint8_t one_hw_search_device(uint8_t idx)
-{
-  uint8_t r;
-  ds2482_address[idx].HWwirenum = 0;
-  ds2482init(ds2482_address[idx].i2c_addr);
-  ds2482reset(ds2482_address[idx].i2c_addr);
-  ds2482owReset(ds2482_address[idx].i2c_addr);
-  r = owMatchFirst(ds2482_address[idx].i2c_addr, tmp_rom);
-  if (r == DS2482_ERR_NO_DEVICE) {
-    /*chyba zadne zarizeni na sbernici*/
-  }
-  if (r) {
-    /*jina chyba*/
-  }
-  ///
-  if (r == DS2482_ERR_OK)
-    while (1) {
-      if (ds2482_address[idx].HWwirenum > HW_ONEWIRE_MAXDEVICES - 1) break;
-      for (uint8_t a = 0; a < 8; a++)  w_rom[Global_HWwirenum].rom[a] = tmp_rom[a];
-      w_rom[Global_HWwirenum].assigned_ds2482 = idx;
-      w_rom[Global_HWwirenum].used = 1;
-      r = owMatchNext(ds2482_address[idx].i2c_addr, tmp_rom);
-      /// celkovy pocet detekovanych roms
-      ds2482_address[idx].HWwirenum++;
-      Global_HWwirenum++;
-      if (r == DS2482_ERR_NO_DEVICE)
-      { ///hledani dokonceno
-        break;
-      }
-    }
-  return r;
-}
-//////
-/// funkce mereni na sbernici
-uint8_t mereni_hwwire(void)
-{
-  uint8_t status = 0;
-  uint8_t t, e;
-  struct_DDS18s20 tds;
-  for (uint8_t w = 0; w < HW_ONEWIRE_MAXROMS; w++)
-  {
-    get_tds18s20(w, &tds);
-    if ((tds.used == 1) && (((uptime & 0xff) - status_tds18s20[w].period_now) > tds.period))
-    {
-      if (status_tds18s20[w].wait == false)
-      {
-        owReset(tds.assigned_ds2482);
-        owMatchRom(tds.assigned_ds2482, tds.rom);
-        owWriteByte(tds.assigned_ds2482, OW_CONVERT_T);
-        status_tds18s20[w].wait = true;
-      }
-      if (status_tds18s20[w].wait == true)
-      {
-        owReset(tds.assigned_ds2482);
-        owMatchRom(tds.assigned_ds2482, tds.rom);
-        owReadByte(tds.assigned_ds2482, &t);
-        if (t != 0)
-        {
-          status_tds18s20[w].wait = false;
-          status = owReset(tds.assigned_ds2482);
-          status = status + owMatchRom(tds.assigned_ds2482, tds.rom );
-          status = status + owWriteByte(tds.assigned_ds2482, OW_READ_SCRATCHPAD);
-          status = status + owReadByte(tds.assigned_ds2482, &e);     //0byte
-          status_tds18s20[w].tempL = e;
-          status = status + owReadByte(tds.assigned_ds2482, &e);     //1byte
-          status_tds18s20[w].tempH = e;
-          status = status + owReadByte(tds.assigned_ds2482, &e); //2byte
-          status = status + owReadByte(tds.assigned_ds2482, &e); //3byte
-          status = status + owReadByte(tds.assigned_ds2482, &e); //4byte
-          status = status + owReadByte(tds.assigned_ds2482, &e); //5byte
-          status = status + owReadByte(tds.assigned_ds2482, &e); //6byte
-          status_tds18s20[w].CR = e; //count remain
-          status = status + owReadByte(tds.assigned_ds2482, &e); //7byte
-          status_tds18s20[w].CP = e; // count per
-          status = status + owReadByte(tds.assigned_ds2482, &e); //8byte
-          status_tds18s20[w].CRC = e; // crc soucet
-          if (status == 0)
-          {
-            int temp = (int) status_tds18s20[w].tempH << 11 | (int) status_tds18s20[w].tempL << 3;
-            status_tds18s20[w].temp = ((temp & 0xfff0) << 3) -  16 + (  (  (status_tds18s20[w].CP - (status_tds18s20[t].CR) << 7) ) / status_tds18s20[w].CP ) + tds.offset;
-            status_tds18s20[w].online = True;
-            for (uint8_t av = 9; av > 0; av--) status_tds18s20[w].average_temp[av] = status_tds18s20[w].average_temp[av - 1];
-            status_tds18s20[w].average_temp[0] = status_tds18s20[w].temp;
-            status_tds18s20[w].period_now = uptime & 0xff;
-          }
-          else
-          {
-            status_tds18s20[w].online = False;
-          }
-        }
-      }
-    }
-  }
-}
+
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -2961,27 +2740,7 @@ void thermostat(void)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////
-/// servisni logovatko pres mqtt ///
-int printf_via_mqtt( char c, FILE * t)
-{
-  char topic[16];
-  mqtt_log[mqtt_log_cnt] = c;
-  mqtt_log[mqtt_log_cnt + 1] = 0;
-  mqtt_log_cnt++;
-  if (mqtt_log_cnt > 127 || c == '\n' || c == 0)
-  {
-    strcpy(topic, "log-printf");
-    send_mqtt_general_payload(&mqtt_client, topic, mqtt_log);
-    mqtt_log_cnt = 0;
-  }
-}
-////
-void log_error(char *log)
-{
-  char topic[16];
-  strcpy(topic, "log-app");
-  send_mqtt_general_payload(&mqtt_client, topic, log);
-}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 void set_default_ring(uint8_t ring)
@@ -3019,6 +2778,12 @@ uint8_t serial_get_speed(void)
 {
   return EEPROM.read(my_serial_speed);
 }
+
+void nrf_mesh_reinit(void)
+{
+  mesh.setNodeID(0);
+  mesh.begin(nrf_load_channel());
+}
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup(void)
 {
@@ -3032,7 +2797,10 @@ void setup(void)
   wdt_enable(WDTO_8S);
   wdt_reset();
 
+  mqtt_set_public_mqtt_client(&mqtt_client);
   fdevopen( &printf_via_mqtt, 0);
+  printf_begin();
+
 
   struct_DDS18s20 tds;
 
@@ -3145,14 +2913,8 @@ void setup(void)
 
 
 
-  ds2482_address[0].i2c_addr = 0b0011000;
-  ds2482_address[0].HWwirenum = 0;
 
-  for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXROMS; idx++ )
-  {
-    status_tds18s20[idx].wait = false;
-    status_tds18s20[idx].period_now = 0;
-  }
+
 
 
   noInterrupts();           // disable all interrupts
@@ -3212,7 +2974,7 @@ void setup(void)
 
   thermostat_init_pid();
 
-  printf_begin();
+
 
   for (uint8_t inic = 0; inic < 15; inic++)
   {
@@ -3232,17 +2994,15 @@ void setup(void)
         EEPROM.write(my_rs_id, 31);
         keyboard_set_sense(255);
         ///
-
         for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
           thermostat_ring_clear(idx);
         ///
-
         for (uint8_t idx = 0; idx < MAX_RTDS; idx++)
         {
           strcpy(tmp2, "");
           remote_tds_set_name(idx, 0 , tmp2);
         }
-
+        ///
         for (uint8_t idx = 0; idx < AVAILABLE_PROGRAM; idx++)
         {
           strcpy(str2, "PROG");
@@ -3255,7 +3015,7 @@ void setup(void)
             thermostat_program_set_week(idx, interval_id, 0);
           }
         }
-
+        ///
         for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXDEVICES; idx++)
         {
           get_tds18s20(idx, &tds);
@@ -3266,12 +3026,11 @@ void setup(void)
           tds.period = 10;
           set_tds18s20(idx, &tds);
         }
-
-
+        ///
         for (uint8_t idx = 0; idx < MAX_SVETEL; idx++) light_set_output(idx, LIGHT_FREE);
+        ///
         rtc.adjust(DateTime(2020, 12, 14, 17, 14, 0));
-
-
+        ///
         device.mac[0] = 2; device.mac[1] = 1; device.mac[2] = 2; device.mac[3] = random(100, 150); device.mac[4] = random(3, 200); device.mac[5] = random(13, 204);
         //device.mac[0] = 2; device.mac[1] = 1; device.mac[2] = 2; device.mac[3] = 17; device.mac[4] = 22; device.mac[5] = 204;
         device.myIP[0] = 192; device.myIP[1] = 168; device.myIP[2] = 2; device.myIP[3] = 110;
@@ -3289,12 +3048,11 @@ void setup(void)
         device_set_name(str2);
         char hostname[10];
         device_get_name(hostname);
-
-
+        ///
         nrf_save_channel(76);
         set_default_ring(0);
         time_set_offset(1);
-
+        ///
         serial_set_mode(RS_MODE_SERIAL);
         /// speed je nasobek 9600
         serial_set_speed(1);
@@ -3319,6 +3077,9 @@ void setup(void)
       rsid = EEPROM.read(my_rs_id);
       analogWrite(PWM_DISP, jas_disp);
       analogWrite(PWM_KEY, jas_key);
+      auto_jas = 0;
+      light_min = 0xffff;
+      light_max = 0;
       ///
       default_ring = get_default_ring();
       ///
@@ -3340,11 +3101,22 @@ void setup(void)
         for (uint8_t cnt = 0; cnt < MAX_AVG_TEMP; cnt++)
           status_tds18s20[idx].average_temp[cnt] = 20000;
 
+      ///
+      for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+        last_output_update[idx] = 0;
 
     }
     ////
     if (inic == 3)
     {
+      ds2482_address[0].i2c_addr = 0b0011000;
+      ds2482_address[0].HWwirenum = 0;
+      ///
+      for (uint8_t idx = 0; idx < HW_ONEWIRE_MAXROMS; idx++ )
+      {
+        status_tds18s20[idx].wait = false;
+        status_tds18s20[idx].period_now = 0;
+      }
       itoa(ds2482_address[0].i2c_addr, tmp1, 10);
       if (ds2482reset(ds2482_address[0].i2c_addr) == DS2482_ERR_OK)
       {
@@ -3422,16 +3194,7 @@ void setup(void)
     {
       strcpy(tmp1, "I-NRF-");
       show_direct(tmp1);
-      radio.begin();
-      radio.enableAckPayload();                     // Allow optional ack payloads
-      radio.enableDynamicPayloads();                // Ack payloads are dynamic payload
-      radio.openWritingPipe(nrf_addresses[1]);
-      radio.openReadingPipe(1, nrf_addresses[0]);
-      radio.startListening();
-      radio.setPALevel(nrf_load_power());
-      radio.setChannel(nrf_load_channel());
-      uint8_t counter;
-      radio.writeAckPayload(1, &counter, 1);
+      nrf_mesh_reinit();
     }
     ////
     if (inic == 9)
@@ -3468,15 +3231,9 @@ void setup(void)
     ////
     if (inic == 12)
     {
-      timeClient.begin();
-      timeClient.setTimeOffset(3600 * time_get_offset());
-      tmp2[0] = 0;
-      createString(tmp2, '.', device.ntp_server, 4, 10);
-      timeClient.setPoolServerName(tmp2);
-      timeClient.setUpdateInterval(1);
       if (selftest_get_0(SELFTEST_ETH_LINK) == 0)
       {
-        if (timeClient.update() == false)
+        if (ntp_check(&timeClient) == 0)
         {
           selftest_set_0(SELFTEST_ERR_NTP);
           strcpy(tmp1, "11NTPE");
@@ -3489,7 +3246,6 @@ void setup(void)
           show_direct(tmp1);
         }
       }
-      timeClient.end();
       delay(250);
     }
     ////
@@ -3644,31 +3400,34 @@ uint8_t blink_led_get_freq(uint8_t led_index)
      - kondenzator k ds18s20
 
   1. klavesnice
-     - kalibraci tlacitek - vyreseno nastavenim pres mqtt - potreba otestovat
-     - podsviceni tlacitek - vyreseni nastavenim preq mqtt - potreba otestovat
+     - kalibraci tlacitek - vyreseno nastavenim pres mqtt - hotovo
+     - podsviceni tlacitek - vyreseni nastavenim preq mqtt - hotovo
      - nocni rezim led podsvetleni tlacitek - na soucasne revizi nejde, mozne reseni je vyuzit svetlo vodivy plast
 
 
   2. display
-     - mqtt nastaveni jasu displeje - otestovat - ok
+     - mqtt nastaveni jasu displeje - hotovo
      - tecku displayje - hotovo
      - menu zjistit pwm vykon, udelat nove menu - hotovo
      - umet blikat s kazdou ledkou jinak rychle 4 rychlosti 0,1,2,5hz - hotovo
         - registr led_blink, rozdelim na 4 useky, budu potrebovat 2 byty
-     - blikat pri rucne nastavene teplote - otestovat v realu
+     - blikat pri rucne nastavene teplote - hotovo
         - UP ledka pri rezimu pro topeni
         - DOWN ledka pro rezimu pro chlazeni
      - blikat ledka progam
         - neni dosazen pozadovany stav pouze svitit
         - dosazene nastaveni blikat ledkou
         - neni definovan program blikat rychle
+     - blikat s ledkou modu, kdy nam output modul neakceptuje stav, nebo prestal odpovidat
 
   3. reinit ntp
      - pokud nefunguje ntp server ulozi spatne casy - fixnuto - hotovo
-     - vice ntp serveru? druhy ntp server hardcoded ip adresa - promyslet jaky ntp server - nereseno - hotovo
      - ziskat zpetnou vazbu - hotovo
      - ulozit do selfcheck promene - hotovo
      - zjistit duvod proc se mi prepsalo nastaveni adresy, mozna fixnuto
+     - pokud nebezi rtc, zkusit udelat ntp update, zkusit periodicky, brat hodnotu ze selfdiag
+     - funkce presunuty do pomocne knihovny - zakladni test - hotovo
+
 
   4. remote tds
      - vyresit problem s prepisem 2x zapisuji do stejneho idx, musim udelat kontrolu zda se pouziva, pokud ano tak ignoruji - hotovo
@@ -3678,12 +3437,12 @@ uint8_t blink_led_get_freq(uint8_t led_index)
      - kompletne predelano funkce vraci stav mqtt clienta
 
   6. metriky zarizeni
-     - mereni loadu procesoru - vymyslet lepe, stale nedoreseno
+     - mereni loadu procesoru - hotovo
      - pocet odeslanych mqqt zprav - potreba otestovat - hotovo
      - pocet prijatych mqqt zprav - potreba otestovat - hotovo
      - pocet zpracovanych mqtt zprav - potreba otestovat - hotovo
      - pocet eventu od klavesnice - potreba otestovat - hotovo
-     - pocitadlo spatne odeslanych mqtt
+     - pocitadlo spatne odeslanych mqtt - hotovo
      - opravit uptime - otestovat - hotovo
 
   7. mqtt nastaveni site, ip, mask, gw, mqtt - hotovo
@@ -3691,6 +3450,7 @@ uint8_t blink_led_get_freq(uint8_t led_index)
       - pres mqqt si to nechat poslat - hotovo
       - totalni unsubscribe
       - random generovani mac adresy posledni 3 byty, uplne pri prvnim initu
+      - udelat zarizeni pro externi nastaveni
 
   8. preprogramovat fuse nemaz eeprom - ok; vraceno zmet
 
@@ -3701,27 +3461,23 @@ uint8_t blink_led_get_freq(uint8_t led_index)
      - umet resit sinclair
      - umet odeslat zpravu
 
-  10. preposilat nrf zpravy
-
   11. opravit logovatko
       - mam opraveno, potreba overit spravnou funkcnost logu - hotovo
       - potreba otestovat vsechny chybove stavy
 
   12. kdyz mode prog - blika = neaktivni a prepnuti jinam stale blika - potreba otestovat - opraveno
 
-  13. nrf24
+  13. nrf24 mesh
       - nastavit kanal
-      - nastavit nazev write kanalu
-      - nastavit nazev read kanalu 1..5
-      - vysilaci vykon
       - scan site - hotovo
-    - zatim jen pripraveno
+      - otestovat
 
   14. bootloader po ethernetu
         zakladni flash pameti- hotovo
         moznost naprogramovat eeprom
         CRC soucet dat, na zaklade toho se prepnout
         umet poslat vlastni dump zpet
+        vymyslet build version
 
   15. otestovat remote_tds jako vstup pro pid regulator
       - remote_tds jako vstup pro ring termostat - potreba otestovat - potreba vyresit zpetnou vazbu
@@ -3747,14 +3503,15 @@ uint8_t blink_led_get_freq(uint8_t led_index)
 
   23. vyresit mikro ventilator
 
-  24. otestovat predelane metody tds/clear, rtds/clear - hotovo
+  24.
 
   25. rozdil odesilani mac u rom tds - hotovo
 
   26. pridat do menu reset - hotovo
 
   27. vyresit problem s merenim osvetleni
-    - pro ruzne fotorezistory jinou prevodni funkci
+    - pro ruzne fotorezistory jinou prevodni funkci - hotovo
+    - otestovat novy zpusob automaticke regulace jasu - hotovo
 
   28. diagnosticke rozhrani rs485
     - umet nastavit sit
@@ -3765,7 +3522,7 @@ uint8_t blink_led_get_freq(uint8_t led_index)
        - timer2, timer3, 05sec, 1sec, mqtt_loop, main_loop, 2 bity jeste volne
 
   30. ovladani svetel - hotovo
-     - podpora pro zpetnou vazbu, napr praskla zarovka, light_state
+     - podpora pro zpetnou vazbu, napr. praskla zarovka, light_state
 
   31. ping termbig
       - novy topic, start nove zarizeni se annoncuje nove dostupne zarizeni
@@ -3791,6 +3548,8 @@ uint8_t blink_led_get_freq(uint8_t led_index)
       - nepodarilo se spojit s ntp serverem - hotovo
       - pocet co se nepodarilo obecne mqtt - potreba otestovat
       - selfdiag zobrazit na displaji - hotovo
+      - mqtt_status - hotovo
+      - link_status - hotovo
 
   41. pres mqtt odesilat i prumernout teplotu z mereni - hotovo
       - potreba inciliazovat pole pri prvnim spustenim - hotovo
@@ -3798,10 +3557,11 @@ uint8_t blink_led_get_freq(uint8_t led_index)
   42. funkce vymaz cele nastaveni, nastaveni defaultu
       - ringu - otestovano - hotovo
       - tds - otestovano - hotovo
-      - programy; k promysleni, co kdyz je dany program prirazen k ringu? a dany program se vymaze. PROG_FREE priznak
+      - programy - hotovo
 
   43. kdyz je nejspise nefunkcni mqtt nelze se dostat do menu
       - jen nekdy
+      - problem je ten, ze nestaci millis counter, mqtt.loop je moc dlouho
 
   44. timeout pro navrat z menu - promyslet
       - pouze ze setup_menu - hotovo
@@ -3812,17 +3572,13 @@ uint8_t blink_led_get_freq(uint8_t led_index)
       - moznost nastavit cas regulace pres mqtt - hotovo
       - promyslet jestli jako vstupni promenou pro pid regulator vzit aktualni teplotu a nebo prumernou - vzit aktualni hodnotu - hotovo
 
-  47. do selfdiag pridat
-      - mqtt_status - hotovo
-      - link_status - hotovo
-
   48. vymyslet default_ring, kdyz neni zadny aktivni
 
-  49. pridat metriku kolik odebiram remote tds - potreba otestovat
-
-  50. pridat metriku kolik odebiram light vystupu - potreba otestovat
 */
-
+/*
+  /thermctl-in/{{DEVICE}}/ring/set/0/active
+  /thermctl-in/{{DEVICE}}/ring/set/0/tds
+*/
 
 
 
@@ -3837,14 +3593,13 @@ void loop()
   char cmd[MAX_TEMP_BUFFER];
   char args[MAX_TEMP_BUFFER];
   struct_DDS18s20 tds;
-  uint8_t pipeno;
-  uint8_t nrf_payload;
+
   uint8_t id;
+  unsigned long load_now;
 
 
 
-
-  load_2++;
+  load_now = millis();
 
   if ( Enc28J60Network::linkStatus() == 1)
     selftest_clear_0(SELFTEST_ETH_LINK);
@@ -3869,21 +3624,23 @@ void loop()
   sbi(watchdog_state, WD_MQTT_LOOP);
 
 
+
+
+
   for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
     thermostat_pid_compute(idx);
 
-  /*
-    if ( radio.available(&pipeno))
-    {
-      radio.read( &nrf_payload, 1 );
-      nrf_payload += 1;
-      radio.writeAckPayload(pipeno, &nrf_payload, 1 );
-    }
-  */
+
+  if (scan_rf_net_enable == 0)
+  {
+    mesh.update();
+    mesh.DHCP();
+  }
 
   if (scan_rf_net_enable == 1)
   {
-    scan_rf_network(scan_rf_net_channel);
+    scan_rf_network(&radio, scan_rf_net_channel);
+    /// kazdy kanal proskenuji 128x
     nrf_scan_check_cnt ++;
     if (nrf_scan_check_cnt > 127)
     {
@@ -3893,10 +3650,18 @@ void loop()
     if (scan_rf_net_channel > 127)
     {
       selftest_clear_0(SELFTEST_NRF_SCAN);
-      stop_scan_rf_network();
-      scan_rf_network_public();
+      stop_scan_rf_network(&radio);
+      scan_rf_network_public(&mqtt_client);
+      nrf_mesh_reinit();
     }
   }
+
+  if (scan_rf_net_enable == 2)
+  {
+    scan_rf_net_enable = 0;
+    radio.printDetails();
+  }
+
 
   if (serial_mode == RS_MODE_AT)
   {
@@ -4160,7 +3925,16 @@ void loop()
       if (strcmp_P(curr_item, title_item_setup_jas) == 0)
       {
         menu_set_root_menu(&setup_menu_jas);
-        setup_menu_jas.args3 = (255 - jas_disp) / 15;
+        if (jas_disp == 0)
+        {
+          setup_menu_jas.current_item = 1;
+          setup_menu_jas.args3 = 0;
+        }
+        else
+        {
+          setup_menu_jas.current_item = 0;
+          setup_menu_jas.args3 = (255 - jas_disp) / 15;
+        }
         key = 0;
       }
       /// menu mqtt status
@@ -4317,8 +4091,15 @@ void loop()
     {
       menu_prev();
     }
-    jas_disp = 255 - (15 * setup_menu_jas.args3);
-    analogWrite(PWM_DISP, jas_disp);
+    if (setup_menu_jas.current_item == 0)
+    {
+      jas_disp = 255 - (15 * setup_menu_jas.args3);
+      analogWrite(PWM_DISP, jas_disp);
+    }
+    if (setup_menu_jas.current_item == 1)
+    {
+      jas_disp = 0;
+    }
     if (key == TL_OK)
     {
       EEPROM.write(my_jas_disp, jas_disp);
@@ -4460,10 +4241,12 @@ void loop()
     //send_mqtt_remote_tds_status();
     //send_network_config();
     send_light_controler();
-
+    send_know_device();
+    send_mesh_status();
   }
 
-
+  ///////////////////////
+  /// kazdych 50ms
   if ((milis - milis_05s) > 50)
   {
     milis_05s = milis;
@@ -4478,7 +4261,6 @@ void loop()
     sbi(watchdog_state, WD_05SEC);
   }
 
-
   ////////////////////
   /// kazdou 1sec
   if ((milis - milis_1s) > 1000)
@@ -4486,16 +4268,16 @@ void loop()
     delay_show_menu++;
     milis_1s = milis;
     uptime++;
-    mereni_hwwire();
-
+    mereni_hwwire(uptime);
+    ///
+    /// odesle ja ziji
     strcpy_P(str2, thermctl_subscribe);
     device_get_name(str1);
     send_mqtt_payload(&mqtt_client, str2, str1);
-
-
+    ///
+    /// aktualizuje seznam znamych mqtt zarizeni
     update_know_mqtt_device();
-
-
+    ///
     for (uint8_t idx = 0; idx < MAX_RS_DEVICE; idx++)
     {
       if (rs_device[idx].type != RS_NONE)
@@ -4504,45 +4286,56 @@ void loop()
           rs_device[idx].last_seen++;
       }
     }
-    serial_max_used_tx = 0;
-
+    /// incrementuje cas nedostupnosti output jednoty
+    for (uint8_t idx = 0; idx < MAX_THERMOSTAT; idx++)
+      if (last_output_update[idx] < 254)
+        last_output_update[idx]++;
+    ///
+    /// kontroluje zakladni funkce
     selftest();
-
+    ///
     /// pocitadlo posledni aktualizace remote tds
     for (uint8_t idx = 0; idx < MAX_RTDS; idx++)
-      remote_tds_last_update[idx]++;
-
+      /// pozor na preteceni bufferu
+      if (remote_tds_last_update[idx] < 254)
+        remote_tds_last_update[idx]++;
+    ///
     /// nastaveni dynamickeho menu pro programy
     use_prog = count_use_prog();
     if (use_prog > 0) use_prog = use_prog - 1;
     menu_item_update_limits(&item_set_select_prog, 0, use_prog);
-
-
+    ///
     /// nastaveni dynamickeho menu teplomeru
     use_tds = count_use_tds();
     use_rtds = count_use_rtds();
     use_tds = use_tds + use_rtds;
     if (use_tds > 0) use_tds = use_tds - 1;
     menu_item_update_limits(&item_show_temp, 0, use_tds);
-
     ///
+    /// ziska pocet pouzitych svetelnych regulatoru
     use_light = count_use_light();
+    use_light_curr = use_light;
     if (use_light > 0) use_light = use_light - 1;
     menu_item_update_limits(&item_select_osvetleni, 0, use_light);
-
+    ///
     /// nastaveni dynamickeho menu vyberu ringu termostatu
     use_ring = count_use_active_rings();
     if (use_ring > 0) use_ring = use_ring - 1;
     menu_item_update_limits(&item_set_select_ring, 0, use_ring);
-
+    ///
     /// automaticke nastaveni jasu displaye
-    aktual_light = analogRead(LIGHT);
-    itmp = (aktual_light / 4 / 15 * 15);
+    light_curr = analogRead(LIGHT);
+    if (light_curr < light_min) light_min = light_curr;
+    if (light_curr > light_max) light_max = light_curr;
+    ///
     if (jas_disp == 0) // Automatika
     {
+      auto_jas = (float) (light_curr - light_min) / (light_max - light_min) * 255;
+      itmp = auto_jas;
       if (itmp > 240) itmp = 240;
       analogWrite(PWM_DISP, itmp);
     }
+    /// nastavim watchdog, ze jsem tady byl
     sbi(watchdog_state, WD_1SEC);
   }
 
@@ -4565,68 +4358,16 @@ void loop()
     wdt_reset();
   }
 
+  load = millis() - load_now;
+  if (load < load_min) load_min = load;
+  if (load > load_max) load_max = load;
+
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////
-void start_scan_rf_network(void)
-{
-  scan_rf_net_enable = 1;
-  scan_rf_net_channel = 0;
-  nrf_scan_check_cnt = 0;
-  for (uint8_t chan = 0; chan < 128; chan++) nrf_used_channels[chan] = 0;
-  radio.startListening();
-  radio.stopListening();
-  for (uint8_t pipe = 1; pipe < 6; pipe++)
-    radio.closeReadingPipe(pipe);
-}
 
-void scan_rf_network(uint8_t channel)
-{
-  if (channel < 128)
-  {
-    radio.setChannel(channel);
-    radio.startListening();
-    delayMicroseconds(128);
-    radio.stopListening();
-    if (radio.testCarrier())
-      nrf_used_channels[channel]++;
-  }
-}
-
-void stop_scan_rf_network(void)
-{
-  scan_rf_net_enable = 0;
-  scan_rf_net_channel = 0;
-  nrf_scan_check_cnt = 0;
-  radio.setChannel(nrf_load_channel());
-}
-
-
-void scan_rf_network_public(void)
-{
-  char topic[16];
-  char payload[128];
-  char tmp1[8];
-  char tmp2[8];
-  strcpy(topic, "rf/used");
-  for (uint8_t radek = 0; radek < 8; radek++)
-  {
-    itoa(radek, tmp1, 16);
-    strcpy(payload, "0x");
-    strcat(payload, tmp1);
-    strcat(payload, " :");
-    for (uint8_t sloupec = 0; sloupec < 16; sloupec++)
-    {
-      itoa(nrf_used_channels[(radek * 15) + sloupec], tmp1, 10);
-      strcat(payload, tmp1);
-      strcat(payload, " ");
-    }
-    send_mqtt_general_payload(&mqtt_client, topic, payload);
-  }
-}
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
@@ -5132,4 +4873,7 @@ uint8_t Bit_Reverse( uint8_t x )
       }
 
    /
+
+    itoa(setup_menu_jas.current_item, str1, 10);
+    log_error(&mqtt_client, str1);
 */
